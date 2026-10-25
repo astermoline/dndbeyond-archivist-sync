@@ -370,12 +370,15 @@ import {
             '# Stat Block'
           );
 
-          await client.characters.update(existing.id, {
+          const updateCharPayload: any = {
             character_name: char.name,
             description: mergedDescription,
             backstory: char.bio.backstory || char.bio.appearance,
-            image: char.avatarUrl,
-          });
+          };
+          if (!existing.image && char.avatarUrl) {
+            updateCharPayload.image = char.avatarUrl;
+          }
+          await client.characters.update(existing.id, updateCharPayload);
           showToast(`✅ Synced "${char.name}" to Archivist!`, 'success');
         } else {
           await client.characters.create({
@@ -422,11 +425,14 @@ import {
             '# Stat Block'
           );
 
-          await client.characters.update(existing.id, {
+          const updateMonPayload: any = {
             character_name: monster.name,
             description: mergedDescription,
-            image: monster.imageUrl,
-          });
+          };
+          if (!existing.image && monster.imageUrl) {
+            updateMonPayload.image = monster.imageUrl;
+          }
+          await client.characters.update(existing.id, updateMonPayload);
           showToast(`✅ Synced "${monster.name}" to Archivist!`, 'success');
         } else {
           await client.characters.create({
@@ -464,12 +470,15 @@ import {
             itemDetailsSection,
             '# Item Details'
           );
-          await client.items.update(existing.id, {
+          const updateItemPayload: any = {
             name: item.name,
             type: item.type,
             description: mergedDesc,
-            image: item.image,
-          });
+          };
+          if (!existing.image && item.image) {
+            updateItemPayload.image = item.image;
+          }
+          await client.items.update(existing.id, updateItemPayload);
           showToast(`✅ Synced "${item.name}" to Archivist!`, 'success');
         } else {
           await client.items.create({

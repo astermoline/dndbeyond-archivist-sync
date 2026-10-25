@@ -390,12 +390,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             '# Stat Block'
           );
 
-          await client.characters.update(existingCharacter.id, {
+          const updateCharPayload: any = {
             character_name: detectedChar.name,
             description: mergedDescription,
             backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
-            image: detectedChar.avatarUrl,
-          });
+          };
+          if (!existingCharacter.image && detectedChar.avatarUrl) {
+            updateCharPayload.image = detectedChar.avatarUrl;
+          }
+          await client.characters.update(existingCharacter.id, updateCharPayload);
           showStatus(syncResult, `Updated "${detectedChar.name}" in Archivist!`, 'success');
         } else {
           const created = await client.characters.create({
@@ -433,10 +436,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     itemSection,
                     '# Item Details'
                   );
-                  await client.items.update(existingCompItem.id, {
+                  const compItemPayload: any = {
                     description: mergedDesc,
-                    image: item.image,
-                  });
+                  };
+                  if (!existingCompItem.image && item.image) {
+                    compItemPayload.image = item.image;
+                  }
+                  await client.items.update(existingCompItem.id, compItemPayload);
                 } else {
                   await client.items.create({
                     campaign_id: selectedCampaignId,
@@ -462,11 +468,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             '# Stat Block'
           );
 
-          await client.characters.update(existingMonster.id, {
+          const updateMonPayload: any = {
             character_name: detectedMonster.name,
             description: mergedDescription,
-            image: detectedMonster.imageUrl,
-          });
+          };
+          if (!existingMonster.image && detectedMonster.imageUrl) {
+            updateMonPayload.image = detectedMonster.imageUrl;
+          }
+          await client.characters.update(existingMonster.id, updateMonPayload);
           showStatus(syncResult, `Updated "${detectedMonster.name}" in Archivist!`, 'success');
         } else {
           const created = await client.characters.create({
@@ -489,12 +498,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             '# Item Details'
           );
 
-          await client.items.update(existingItem.id, {
+          const updateItemPayload: any = {
             name: detectedItem.name,
             type: detectedItem.type,
             description: mergedDescription,
-            image: detectedItem.image,
-          });
+          };
+          if (!existingItem.image && detectedItem.image) {
+            updateItemPayload.image = detectedItem.image;
+          }
+          await client.items.update(existingItem.id, updateItemPayload);
           showStatus(syncResult, `Updated "${detectedItem.name}" in Archivist!`, 'success');
         } else {
           const created = await client.items.create({
