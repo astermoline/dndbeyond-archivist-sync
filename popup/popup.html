@@ -54,7 +54,10 @@
             <span class="status-dot" id="status-dot"></span>
             <div class="entity-titles">
               <span class="entity-status-label" id="entity-status-label">Detecting D&D Beyond page...</span>
-              <h3 class="entity-name" id="entity-name">—</h3>
+              <div class="entity-name-row">
+                <h3 class="entity-name" id="entity-name">—</h3>
+                <a id="open-archivist-link" class="archivist-link-badge hidden" target="_blank" rel="noopener noreferrer" title="Open in Archivist">Open in Archivist ↗</a>
+              </div>
             </div>
           </div>
           <div class="entity-meta" id="entity-meta"></div>
@@ -67,10 +70,17 @@
           </label>
         </div>
 
-        <button id="sync-btn" class="primary-button disabled" disabled>
-          <span class="btn-text" id="sync-btn-text">Sync with Archivist</span>
-          <span class="spinner" id="sync-spinner"></span>
-        </button>
+        <div class="actions-container">
+          <button id="sync-btn" class="primary-button disabled" disabled>
+            <span class="btn-text" id="sync-btn-text">Sync with Archivist</span>
+            <span class="spinner" id="sync-spinner"></span>
+          </button>
+
+          <button id="update-backstory-btn" class="secondary-button hidden">
+            <span class="btn-text" id="update-backstory-btn-text">Update D&D Beyond Backstory</span>
+            <span class="spinner" id="update-backstory-spinner"></span>
+          </button>
+        </div>
 
         <div id="sync-result" class="status-msg hidden"></div>
       </section>

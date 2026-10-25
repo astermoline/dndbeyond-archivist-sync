@@ -328,3 +328,70 @@ footer a:hover {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* Additional Action and Link Styles */
+.entity-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.archivist-link-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #c084fc !important;
+  background: rgba(124, 58, 237, 0.2);
+  border: 1px solid rgba(124, 58, 237, 0.4);
+  border-radius: 6px;
+  padding: 2px 6px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.archivist-link-badge:hover {
+  background: rgba(124, 58, 237, 0.35);
+  border-color: rgba(124, 58, 237, 0.8);
+  color: #ffffff !important;
+}
+
+.actions-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.secondary-button {
+  background: rgba(124, 58, 237, 0.12);
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #c084fc;
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(124, 58, 237, 0.25);
+  border-color: rgba(124, 58, 237, 0.65);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.secondary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.secondary-button.loading .spinner {
+  display: inline-block;
+}

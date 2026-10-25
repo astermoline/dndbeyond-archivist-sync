@@ -14,6 +14,17 @@
     "https://monster-service.dndbeyond.com/*",
     "https://api.myarchivist.ai/*"
   ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.dndbeyond.com/characters/*",
+        "https://www.dndbeyond.com/magic-items/*",
+        "https://www.dndbeyond.com/equipment/*"
+      ],
+      "js": ["scripts/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

@@ -25,12 +25,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const entityStatusLabel = document.getElementById('entity-status-label') as HTMLElement;
   const entityName = document.getElementById('entity-name') as HTMLElement;
   const entityMeta = document.getElementById('entity-meta') as HTMLElement;
+  const openArchivistLink = document.getElementById('open-archivist-link') as HTMLAnchorElement;
   const itemImportOptions = document.getElementById('item-import-options') as HTMLElement;
   const syncInventoryItems = document.getElementById('sync-inventory-items') as HTMLInputElement;
 
   const syncBtn = document.getElementById('sync-btn') as HTMLButtonElement;
   const syncBtnText = document.getElementById('sync-btn-text') as HTMLElement;
   const syncSpinner = document.getElementById('sync-spinner') as HTMLElement;
+  const updateBackstoryBtn = document.getElementById('update-backstory-btn') as HTMLButtonElement;
+  const updateBackstorySpinner = document.getElementById('update-backstory-spinner') as HTMLElement;
   const syncResult = document.getElementById('sync-result') as HTMLElement;
 
   let client: ArchivistClient | null = null;
@@ -142,29 +145,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 4. Campaign change listener
-  campaignSelect.addEventListener('change', () => {
+  // 4. Change Campaign Selection
+  campaignSelect.addEventListener('change', async () => {
     selectedCampaignId = campaignSelect.value;
-    chrome.storage.sync.set({ selectedCampaignId });
-    if (detectedType) {
-      checkExistingEntityInCampaign();
-    }
+    await chrome.storage.sync.set({ selectedCampaignId });
+    await checkExistingEntityInCampaign();
   });
 
-  // 5. Inspect Active D&D Beyond Tab
+  // 5. Inspect Active Tab on D&D Beyond
   async function inspectCurrentTab() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab || !tab.url) {
-        setEntityState('error', 'Cannot access active tab', '—');
+        setEntityState('error', 'Not a valid tab', 'Open D&D Beyond to sync');
         return;
       }
-      activeTabUrl = tab.url;
 
-      if (activeTabUrl.includes('dndbeyond.com/characters/')) {
+      activeTabUrl = tab.url;
+      const charId = extractCharacterId(activeTabUrl);
+      const itemId = extractItemId(activeTabUrl);
+
+      if (charId) {
         detectedType = 'character';
-        const charId = extractCharacterId(activeTabUrl);
-        setEntityState('ready', 'Fetching Character Sheet...', `ID: ${charId}`);
+        setEntityState('ready', 'Character Detected', 'Loading character info...');
+        syncBtn.disabled = true;
 
         try {
           detectedChar = await fetchCharacterById(charId);
@@ -175,10 +179,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err: any) {
           setEntityState('error', 'Failed to fetch character', err.message);
         }
-      } else if (activeTabUrl.includes('dndbeyond.com/magic-items/') || activeTabUrl.includes('dndbeyond.com/equipment/')) {
+      } else if (itemId || activeTabUrl.includes('magic-items') || activeTabUrl.includes('equipment')) {
         detectedType = 'item';
-        const itemId = extractItemId(activeTabUrl);
-        setEntityState('ready', 'Fetching Item...', itemId ? `ID: ${itemId}` : 'Item Page');
+        setEntityState('ready', 'Item Detected', 'Loading item info...');
+        syncBtn.disabled = true;
 
         try {
           if (itemId) {
@@ -198,6 +202,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         setEntityState('error', 'Page Not Supported', 'Navigate to a Character or Item');
         entityMeta.textContent = 'Open a D&D Beyond character sheet or magic item page to sync.';
         syncBtn.disabled = true;
+        openArchivistLink.classList.add('hidden');
+        updateBackstoryBtn.classList.add('hidden');
       }
     } catch (err: any) {
       setEntityState('error', 'Inspection Error', err.message);
@@ -226,10 +232,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Matched in Campaign';
           syncBtnText.textContent = 'Sync / Update Character';
+          openArchivistLink.href = `https://myarchivist.ai/campaigns/${selectedCampaignId}/characters/${existingCharacter.id}`;
+          openArchivistLink.classList.remove('hidden');
+          updateBackstoryBtn.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot ready';
           entityStatusLabel.textContent = 'New Character (Ready to Import)';
           syncBtnText.textContent = 'Import Character to Archivist';
+          openArchivistLink.classList.add('hidden');
+          updateBackstoryBtn.classList.add('hidden');
         }
         syncBtn.disabled = false;
         syncBtn.classList.remove('disabled');
@@ -254,11 +265,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Item Matched in Campaign';
           syncBtnText.textContent = 'Update Item in Archivist';
+          openArchivistLink.href = `https://myarchivist.ai/campaigns/${selectedCampaignId}/items/${existingItem.id}`;
+          openArchivistLink.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot ready';
           entityStatusLabel.textContent = 'New Item (Ready to Import)';
           syncBtnText.textContent = 'Import Item to Archivist';
+          openArchivistLink.classList.add('hidden');
         }
+        updateBackstoryBtn.classList.add('hidden');
         syncBtn.disabled = false;
         syncBtn.classList.remove('disabled');
       } catch (err) {
@@ -354,6 +369,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     } finally {
       syncBtn.disabled = false;
       syncSpinner.style.display = 'none';
+    }
+  });
+
+  // 8. Update D&D Beyond Backstory from Archivist
+  updateBackstoryBtn.addEventListener('click', async () => {
+    if (!existingCharacter) return;
+    const backstory = existingCharacter.backstory || existingCharacter.description || '';
+    if (!backstory) {
+      showStatus(syncResult, 'No backstory found in Archivist for this character.', 'error');
+      return;
+    }
+
+    updateBackstoryBtn.disabled = true;
+    updateBackstorySpinner.style.display = 'inline-block';
+    hideStatus(syncResult);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error('No active D&D Beyond tab found.');
+
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        action: 'UPDATE_BACKSTORY',
+        backstory,
+      });
+
+      if (response?.success) {
+        showStatus(syncResult, response.message || '✨ Backstory updated on D&D Beyond!', 'success');
+      } else {
+        showStatus(syncResult, response?.message || '📋 Backstory copied to clipboard! (Open Notes tab to paste)', 'success');
+      }
+    } catch (err: any) {
+      // If message delivery fails, copy directly to clipboard
+      await navigator.clipboard.writeText(backstory).catch(() => {});
+      showStatus(syncResult, '📋 Backstory copied to clipboard! Paste it into the Backstory field on your sheet.', 'success');
+    } finally {
+      updateBackstoryBtn.disabled = false;
+      updateBackstorySpinner.style.display = 'none';
     }
   });
 
