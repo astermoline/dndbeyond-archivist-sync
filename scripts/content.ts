@@ -253,7 +253,9 @@ import {
       const linkAnchor = document.getElementById('archivist-cross-ref-link') as HTMLAnchorElement;
       if (!linkAnchor) return;
 
-      if (charId) {
+      if (url.includes('/characters/')) {
+        const charId = extractCharacterId(url);
+        if (!charId) return;
         const char = await fetchCharacterById(charId);
         const { data: charList } = (await client.characters.list({
           campaign_id: stored.selectedCampaignId,
@@ -271,7 +273,7 @@ import {
           linkAnchor.title = `View ${matched.character_name} in Archivist`;
           linkAnchor.style.display = 'inline-flex';
         }
-      } else if (monsterId || url.includes('/monsters/')) {
+      } else if (url.includes('/monsters/')) {
         let monsterName = '';
         if (monsterId) {
           try {
@@ -300,7 +302,7 @@ import {
           linkAnchor.title = `View ${matched.character_name} in Archivist`;
           linkAnchor.style.display = 'inline-flex';
         }
-      } else if (itemId || url.includes('magic-items') || url.includes('equipment')) {
+      } else if (url.includes('/magic-items/') || url.includes('/equipment/')) {
         const item = url.includes('magic-items') && itemId
           ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
           : parseItemDom(document);
@@ -346,7 +348,9 @@ import {
       const monsterId = extractMonsterId(url);
       const itemId = extractItemId(url);
 
-      if (charId) {
+      if (url.includes('/characters/')) {
+        const charId = extractCharacterId(url);
+        if (!charId) return;
         showToast('🔮 Fetching character from D&D Beyond...', 'info');
         const char = await fetchCharacterById(charId);
 
@@ -392,7 +396,7 @@ import {
           showToast(`✅ Imported "${char.name}" into Archivist!`, 'success');
         }
         await updateCrossReferenceLink();
-      } else if (monsterId || url.includes('/monsters/')) {
+      } else if (url.includes('/monsters/')) {
         showToast('🔮 Fetching monster stat block...', 'info');
         let monster;
         if (monsterId) {

@@ -176,11 +176,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       activeTabUrl = tab.url;
-      const charId = extractCharacterId(activeTabUrl);
-      const monsterId = extractMonsterId(activeTabUrl);
-      const itemId = extractItemId(activeTabUrl);
-
-      if (charId) {
+      if (activeTabUrl.includes('/characters/')) {
+        const charId = extractCharacterId(activeTabUrl);
         detectedType = 'character';
         setEntityState('ready', 'Character Detected', 'Loading character info...');
         syncBtn.disabled = true;
@@ -194,7 +191,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err: any) {
           setEntityState('error', 'Failed to fetch character', err.message);
         }
-      } else if (monsterId || activeTabUrl.includes('/monsters/')) {
+      } else if (activeTabUrl.includes('/monsters/')) {
+        const monsterId = extractMonsterId(activeTabUrl);
         detectedType = 'monster';
         setEntityState('ready', 'Monster Detected', 'Loading monster stat block...');
         syncBtn.disabled = true;
@@ -230,7 +228,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err: any) {
           setEntityState('error', 'Failed to fetch monster', err.message);
         }
-      } else if (itemId || activeTabUrl.includes('magic-items') || activeTabUrl.includes('equipment')) {
+      } else if (activeTabUrl.includes('/magic-items/') || activeTabUrl.includes('/equipment/')) {
+        const itemId = extractItemId(activeTabUrl);
         detectedType = 'item';
         setEntityState('ready', 'Item Detected', 'Loading item info...');
         syncBtn.disabled = true;
