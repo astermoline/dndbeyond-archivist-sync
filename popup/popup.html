@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D&D Beyond Archivist Sync</title>
+  <link rel="stylesheet" href="popup.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="popup-container">
+    <header>
+      <div class="logo-area">
+        <span class="logo-icon">🔮</span>
+        <h1>Archivist Sync</h1>
+      </div>
+      <button id="settings-toggle" class="icon-button" title="Settings / API Key">⚙️</button>
+    </header>
+
+    <main>
+      <!-- View 1: API Key Setup / Settings -->
+      <section id="settings-view" class="view hidden">
+        <h2>Archivist API Key</h2>
+        <p class="section-desc">Find your API key in Account Settings → API Keys on myarchivist.ai.</p>
+        
+        <div class="input-group">
+          <label for="api-key-input">API Key</label>
+          <input type="password" id="api-key-input" placeholder="arch_live_..." autocomplete="off">
+        </div>
+
+        <button id="save-key-btn" class="primary-button">
+          <span class="btn-text">Connect & Save</span>
+          <span class="spinner" id="save-spinner"></span>
+        </button>
+
+        <div id="settings-status" class="status-msg hidden"></div>
+      </section>
+
+      <!-- View 2: Main Sync Interface -->
+      <section id="main-view" class="view">
+        <div class="campaign-selector-box">
+          <label for="campaign-select">Target Campaign</label>
+          <div class="select-wrapper">
+            <select id="campaign-select" disabled>
+              <option value="">Loading campaigns...</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="entity-card" id="entity-card">
+          <div class="entity-header">
+            <span class="status-dot" id="status-dot"></span>
+            <div class="entity-titles">
+              <span class="entity-status-label" id="entity-status-label">Detecting D&D Beyond page...</span>
+              <h3 class="entity-name" id="entity-name">—</h3>
+            </div>
+          </div>
+          <div class="entity-meta" id="entity-meta"></div>
+        </div>
+
+        <div class="options-box hidden" id="item-import-options">
+          <label class="checkbox-label">
+            <input type="checkbox" id="sync-inventory-items" checked>
+            <span>Import equipped magic items to compendium</span>
+          </label>
+        </div>
+
+        <button id="sync-btn" class="primary-button disabled" disabled>
+          <span class="btn-text" id="sync-btn-text">Sync with Archivist</span>
+          <span class="spinner" id="sync-spinner"></span>
+        </button>
+
+        <div id="sync-result" class="status-msg hidden"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Powered by <a href="https://myarchivist.ai" target="_blank">Archivist AI</a></span>
+    </footer>
+  </div>
+  <script type="module" src="popup.ts"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "dndbeyond-archivist-sync",
+  "version": "1.0.0",
+  "description": "Chrome extension to synchronize D&D Beyond characters and items with myarchivist.ai campaigns.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@astermoe/dndbeyond-parser": "file:../dndbeyond-parser",
+    "@astermoe/archivist-sdk": "file:../archivist-sdk"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}
