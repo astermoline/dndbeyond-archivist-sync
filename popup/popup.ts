@@ -167,6 +167,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     await checkExistingEntityInCampaign();
   });
 
+  function getDndBeyondEntity(rawUrl: string): { type: 'character' | 'monster' | 'item'; idOrSlug: string } | null {
+    try {
+      const parsed = new URL(rawUrl);
+      if (!parsed.hostname.includes('dndbeyond.com')) return null;
+      const segments = parsed.pathname.split('/').filter(Boolean);
+      if (segments.length < 2) return null;
+      const section = segments[0].toLowerCase();
+      const subpath = segments[1];
+      if (section === 'characters') {
+        if (/^\d+$/.test(subpath)) return { type: 'character', idOrSlug: subpath };
+        return null;
+      }
+      if (section === 'monsters') {
+        if (subpath) return { type: 'monster', idOrSlug: subpath };
+        return null;
+      }
+      if (section === 'magic-items' || section === 'equipment') {
+        if (subpath) return { type: 'item', idOrSlug: subpath };
+        return null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   // 5. Inspect Active Tab on D&D Beyond
   async function inspectCurrentTab() {
     try {
@@ -177,8 +203,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       activeTabUrl = tab.url;
-      if (activeTabUrl.includes('/characters/')) {
-        const charId = extractCharacterId(activeTabUrl);
+      const entity = getDndBeyondEntity(activeTabUrl);
+      if (!entity) {
+        detectedType = null;
+        setEntityState('error', 'Page Not Supported', 'Navigate to a Character, Monster, or Item');
+        entityMeta.textContent = 'Open an individual D&D Beyond character sheet, monster stat block, or item page to sync.';
+        syncBtn.disabled = true;
+        openArchivistLink.classList.add('hidden');
+        updateBackstoryBtn.classList.add('hidden');
+        return;
+      }
+
+      if (entity.type === 'character') {
+        const charId = extractCharacterId(entity.idOrSlug) || parseInt(entity.idOrSlug, 10);
         detectedType = 'character';
         setEntityState('ready', 'Character Detected', 'Loading character info...');
         syncBtn.disabled = true;
@@ -294,7 +331,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Matched in Campaign';
           syncBtnText.textContent = 'Sync / Update Character';
-          openArchivistLink.href = `https://myarchivist.ai/campaigns/${selectedCampaignId}/characters/${existingCharacter.id}`;
+          openArchivistLink.href = `https://app.myarchivist.ai/compendium/characters/${existingCharacter.id}?section=characters`;
           openArchivistLink.classList.remove('hidden');
           updateBackstoryBtn.classList.remove('hidden');
         } else {
@@ -327,7 +364,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Monster Matched in Campaign';
           syncBtnText.textContent = 'Sync / Update Monster';
-          openArchivistLink.href = `https://myarchivist.ai/campaigns/${selectedCampaignId}/characters/${existingMonster.id}`;
+          openArchivistLink.href = `https://app.myarchivist.ai/compendium/characters/${existingMonster.id}?section=characters`;
           openArchivistLink.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot ready';
@@ -360,7 +397,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Item Matched in Campaign';
           syncBtnText.textContent = 'Update Item in Archivist';
-          openArchivistLink.href = `https://myarchivist.ai/campaigns/${selectedCampaignId}/items/${existingItem.id}`;
+          openArchivistLink.href = `https://app.myarchivist.ai/compendium/items/${existingItem.id}?section=items`;
           openArchivistLink.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot ready';

@@ -25,7 +25,7 @@ body {
   background: var(--bg-gradient);
   color: var(--text-primary);
   width: 340px;
-  min-height: 400px;
+  min-height: 420px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -40,28 +40,41 @@ body {
 }
 
 header {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.logo-area {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+#settings-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
 }
 
-.logo-icon {
-  font-size: 20px;
-  filter: drop-shadow(0 0 6px var(--accent-purple-glow));
+.logo-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.header-logo-img {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: contain;
+  filter: drop-shadow(0 0 10px var(--accent-purple-glow));
 }
 
 h1 {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 700;
+  text-align: center;
   background: linear-gradient(to right, #c084fc, #34d399);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
