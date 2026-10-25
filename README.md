@@ -1,4 +1,4 @@
-# D&D Beyond Archivist Sync
+# Archives Beyond
 
 Chrome Extension (Manifest V3) that synchronizes D&D Beyond Player Characters, Magic Items, and Equipment directly into your [Archivist AI](https://myarchivist.ai) campaigns.
 

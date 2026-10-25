@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "D&D Beyond Archivist Sync",
+  "name": "Archives Beyond",
   "version": "1.0.0",
-  "description": "Synchronize D&D Beyond character sheets, monsters, and items directly into your Archivist campaigns.",
+  "description": "Synchronize D&D Beyond characters, monsters, and items directly into your Archivist campaigns.",
   "permissions": [
     "storage",
     "activeTab",
@@ -22,7 +22,9 @@
         "https://www.dndbeyond.com/magic-items/*",
         "https://www.dndbeyond.com/equipment/*"
       ],
-      "js": ["scripts/content.js"],
+      "js": [
+        "scripts/content.js"
+      ],
       "run_at": "document_idle"
     }
   ],

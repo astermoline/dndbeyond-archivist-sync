@@ -216,8 +216,8 @@ import {
     // Sync Button
     const syncBtn = document.createElement('button');
     syncBtn.className = 'archivist-action-btn';
-    syncBtn.innerHTML = '<span>🔮</span><span>Archivist Sync</span>';
-    syncBtn.title = 'Sync with your Archivist Campaign';
+    syncBtn.innerHTML = '<span>🔮</span><span>Archives Beyond</span>';
+    syncBtn.title = 'Sync with your Archivist Campaign via Archives Beyond';
     syncBtn.addEventListener('click', (e) => {
       e.preventDefault();
       handleHeaderSyncClick(syncBtn);
@@ -344,7 +344,7 @@ import {
     try {
       const stored = await chrome.storage.sync.get(['archivistApiKey', 'selectedCampaignId']);
       if (!stored.archivistApiKey || !stored.selectedCampaignId) {
-        showToast('⚠️ Please configure your API key in the Archivist Sync extension popup.', 'error');
+        showToast('⚠️ Please configure your API key in the Archives Beyond extension popup.', 'error');
         return;
       }
 
@@ -551,7 +551,7 @@ import {
     try {
       const stored = await chrome.storage.sync.get(['archivistApiKey', 'selectedCampaignId']);
       if (!stored.archivistApiKey || !stored.selectedCampaignId) {
-        showToast('⚠️ Please configure your Archivist API key in the extension popup.', 'error');
+        showToast('⚠️ Please configure your API key in the Archives Beyond extension popup.', 'error');
         return;
       }
 
