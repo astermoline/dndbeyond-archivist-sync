@@ -386,7 +386,7 @@ import {
             description: mergedDescription,
             backstory: char.bio.backstory || char.bio.appearance,
           };
-          if (!existing.image && char.avatarUrl) {
+          if ((!existing.image || isLowResThumbnail(existing.image)) && char.avatarUrl) {
             updateCharPayload.image = char.avatarUrl;
           }
           await client.characters.update(existing.id, updateCharPayload);

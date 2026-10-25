@@ -408,7 +408,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             description: mergedDescription,
             backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
           };
-          if (!existingCharacter.image && detectedChar.avatarUrl) {
+          if ((!existingCharacter.image || isLowResThumbnail(existingCharacter.image)) && detectedChar.avatarUrl) {
             updateCharPayload.image = detectedChar.avatarUrl;
           }
           await client.characters.update(existingCharacter.id, updateCharPayload);
