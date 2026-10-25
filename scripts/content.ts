@@ -419,8 +419,9 @@ import {
         const monsterStatBlock = formatMonsterStatBlock(monster, url);
 
         if (existing) {
+          const fresh = await client.characters.get(existing.id, { with_links: true });
           const mergedDescription = mergeStatBlockIntoDescription(
-            existing.description || '',
+            fresh.description || '',
             monsterStatBlock,
             '# Stat Block'
           );
@@ -465,8 +466,9 @@ import {
         const itemDetailsSection = formatItemDetails(item, url);
 
         if (existing) {
+          const fresh = await client.items.get(existing.id, { with_links: true });
           const mergedDesc = mergeStatBlockIntoDescription(
-            existing.description || '',
+            fresh.description || '',
             itemDetailsSection,
             '# Item Details'
           );
@@ -547,6 +549,7 @@ import {
       const { data: charList } = (await client.characters.list({
         campaign_id: stored.selectedCampaignId,
         size: 100,
+        with_links: true,
       })) as { data: Character[] };
 
       const matched = charList.find(

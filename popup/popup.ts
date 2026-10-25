@@ -270,6 +270,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const { data: charList } = (await client.characters.list({
           campaign_id: selectedCampaignId,
           size: 100,
+          with_links: true,
         })) as { data: Character[] };
 
         existingCharacter =
@@ -335,6 +336,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const { data: itemList } = (await client.items.list({
           campaign_id: selectedCampaignId,
           size: 100,
+          with_links: true,
         })) as { data: Item[] };
 
         existingItem =
@@ -384,6 +386,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const statBlockSection = formatCharacterStatBlock(detectedChar, activeTabUrl);
 
         if (existingCharacter) {
+          existingCharacter = await client.characters.get(existingCharacter.id, { with_links: true });
           const mergedDescription = mergeStatBlockIntoDescription(
             existingCharacter.description || '',
             statBlockSection,
@@ -462,6 +465,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const monsterStatBlock = formatMonsterStatBlock(detectedMonster, activeTabUrl);
 
         if (existingMonster) {
+          existingMonster = await client.characters.get(existingMonster.id, { with_links: true });
           const mergedDescription = mergeStatBlockIntoDescription(
             existingMonster.description || '',
             monsterStatBlock,
@@ -492,6 +496,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const itemDetailsSection = formatItemDetails(detectedItem, activeTabUrl);
 
         if (existingItem) {
+          existingItem = await client.items.get(existingItem.id, { with_links: true });
           const mergedDescription = mergeStatBlockIntoDescription(
             existingItem.description || '',
             itemDetailsSection,
