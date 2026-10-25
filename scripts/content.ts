@@ -2,10 +2,21 @@ import { ArchivistClient, Character, Item } from '@astermoe/archivist-sdk';
 import {
   extractCharacterId,
   fetchCharacterById,
+  extractMonsterId,
+  fetchMonsterById,
+  parseMonsterDom,
   extractItemId,
   fetchItemTooltipJson,
   parseItemDom,
 } from '@astermoe/dndbeyond-parser';
+import {
+  isEligibleMagicItem,
+  formatCharacterStatBlock,
+  formatMonsterStatBlock,
+  formatItemDetails,
+  mergeStatBlockIntoDescription,
+  extractUserNotesFromDescription,
+} from '../src/utils/sync-helpers';
 
 (() => {
   // Prevent duplicate execution
@@ -117,7 +128,7 @@ import {
         display: flex;
         align-items: center;
         gap: 8px;
-        max-width: 360px;
+        max-width: 380px;
       }
       .archivist-toast.archivist-toast-success {
         border-color: #10b981;
@@ -159,7 +170,7 @@ import {
     }, 4000);
   }
 
-  // 3. React Input Value Setter (bypasses React internal value tracker)
+  // 3. React Input Value Setter
   function setReactInputValue(input: HTMLTextAreaElement | HTMLInputElement, value: string) {
     const proto = input instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -173,25 +184,26 @@ import {
   }
 
   // 4. Header Sync Widget & Cross-Reference Link Injection
-  let cachedMatchedEntity: { id: string; type: 'character' | 'item'; campaignId: string } | null = null;
-
   async function checkAndInjectHeaderWidget() {
     if (document.getElementById('archivist-header-widget')) return;
 
     const url = window.location.href;
     const charId = extractCharacterId(url);
+    const monsterId = extractMonsterId(url);
     const itemId = extractItemId(url);
 
-    if (!charId && !itemId) return;
+    if (!charId && !monsterId && !itemId && !url.includes('/monsters/')) return;
 
     // Search for suitable header container
     const headerContainer =
       document.querySelector('.ct-character-header-desktop__actions') ||
       document.querySelector('.ct-character-sheet-desktop__header') ||
       document.querySelector('.ct-character-header-desktop') ||
-      document.querySelector('.item-details-header') ||
+      document.querySelector('.mon-stat-block-2024__header, .mon-stat-block__header') ||
       document.querySelector('.page-header__actions') ||
-      document.querySelector('.p-article-header__actions');
+      document.querySelector('.p-article-header__actions') ||
+      document.querySelector('.page-header') ||
+      document.querySelector('.item-details-header');
 
     if (!headerContainer) return;
 
@@ -235,13 +247,13 @@ import {
       const client = new ArchivistClient({ apiKey: stored.archivistApiKey });
       const url = window.location.href;
       const charId = extractCharacterId(url);
+      const monsterId = extractMonsterId(url);
       const itemId = extractItemId(url);
 
       const linkAnchor = document.getElementById('archivist-cross-ref-link') as HTMLAnchorElement;
       if (!linkAnchor) return;
 
       if (charId) {
-        // Fetch character from DDB to match name
         const char = await fetchCharacterById(charId);
         const { data: charList } = (await client.characters.list({
           campaign_id: stored.selectedCampaignId,
@@ -255,13 +267,41 @@ import {
         );
 
         if (matched) {
-          cachedMatchedEntity = { id: matched.id, type: 'character', campaignId: stored.selectedCampaignId };
           linkAnchor.href = `https://myarchivist.ai/campaigns/${stored.selectedCampaignId}/characters/${matched.id}`;
           linkAnchor.title = `View ${matched.character_name} in Archivist`;
           linkAnchor.style.display = 'inline-flex';
         }
-      } else if (itemId) {
-        const item = url.includes('magic-items')
+      } else if (monsterId || url.includes('/monsters/')) {
+        let monsterName = '';
+        if (monsterId) {
+          try {
+            const m = await fetchMonsterById(monsterId);
+            monsterName = m.name;
+          } catch {
+            monsterName = parseMonsterDom(document).name;
+          }
+        } else {
+          monsterName = parseMonsterDom(document).name;
+        }
+
+        const { data: charList } = (await client.characters.list({
+          campaign_id: stored.selectedCampaignId,
+          size: 100,
+        })) as { data: Character[] };
+
+        const matched = charList.find(
+          (c) =>
+            c.character_name.toLowerCase() === monsterName.toLowerCase() ||
+            c.character_aliases?.some((a) => a.toLowerCase() === monsterName.toLowerCase())
+        );
+
+        if (matched) {
+          linkAnchor.href = `https://myarchivist.ai/campaigns/${stored.selectedCampaignId}/characters/${matched.id}`;
+          linkAnchor.title = `View ${matched.character_name} in Archivist`;
+          linkAnchor.style.display = 'inline-flex';
+        }
+      } else if (itemId || url.includes('magic-items') || url.includes('equipment')) {
+        const item = url.includes('magic-items') && itemId
           ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
           : parseItemDom(document);
 
@@ -277,7 +317,6 @@ import {
         );
 
         if (matched) {
-          cachedMatchedEntity = { id: matched.id, type: 'item', campaignId: stored.selectedCampaignId };
           linkAnchor.href = `https://myarchivist.ai/campaigns/${stored.selectedCampaignId}/items/${matched.id}`;
           linkAnchor.title = `View ${matched.name} in Archivist`;
           linkAnchor.style.display = 'inline-flex';
@@ -304,6 +343,7 @@ import {
       const client = new ArchivistClient({ apiKey: stored.archivistApiKey });
       const url = window.location.href;
       const charId = extractCharacterId(url);
+      const monsterId = extractMonsterId(url);
       const itemId = extractItemId(url);
 
       if (charId) {
@@ -321,32 +361,87 @@ import {
             c.character_aliases?.some((a) => a.toLowerCase() === char.name.toLowerCase())
         );
 
-        const abilitySummary = `| STR | DEX | CON | INT | WIS | CHA |\n| :---: | :---: | :---: | :---: | :---: | :---: |\n| ${char.abilities.strength.score} | ${char.abilities.dexterity.score} | ${char.abilities.constitution.score} | ${char.abilities.intelligence.score} | ${char.abilities.wisdom.score} | ${char.abilities.charisma.score} |`;
-        const description = `**Level ${char.totalLevel} ${char.species} ${char.classLine}**\n\n- **AC:** ${char.ac.value} | **HP:** ${char.hp.value}/${char.hp.max} | **Speed:** ${char.speed}\n- **Senses:** ${char.senses.join(', ')}\n- **Languages:** ${char.languages.join(', ')}\n\n### Ability Scores\n${abilitySummary}`;
+        const statBlockSection = formatCharacterStatBlock(char, url);
 
         if (existing) {
+          const mergedDescription = mergeStatBlockIntoDescription(
+            existing.description || '',
+            statBlockSection,
+            '# Stat Block'
+          );
+
           await client.characters.update(existing.id, {
             character_name: char.name,
-            description,
+            description: mergedDescription,
             backstory: char.bio.backstory || char.bio.appearance,
             image: char.avatarUrl,
           });
           showToast(`✅ Synced "${char.name}" to Archivist!`, 'success');
         } else {
-          const created = await client.characters.create({
+          await client.characters.create({
             campaign_id: stored.selectedCampaignId,
             character_name: char.name,
             type: 'PC',
-            description,
+            description: statBlockSection,
             backstory: char.bio.backstory || char.bio.appearance,
             image: char.avatarUrl,
           });
           showToast(`✅ Imported "${char.name}" into Archivist!`, 'success');
         }
         await updateCrossReferenceLink();
-      } else if (itemId) {
+      } else if (monsterId || url.includes('/monsters/')) {
+        showToast('🔮 Fetching monster stat block...', 'info');
+        let monster;
+        if (monsterId) {
+          try {
+            monster = await fetchMonsterById(monsterId);
+          } catch {
+            monster = parseMonsterDom(document);
+          }
+        } else {
+          monster = parseMonsterDom(document);
+        }
+
+        const { data: charList } = (await client.characters.list({
+          campaign_id: stored.selectedCampaignId,
+          size: 100,
+        })) as { data: Character[] };
+
+        const existing = charList.find(
+          (c) =>
+            c.character_name.toLowerCase() === monster.name.toLowerCase() ||
+            c.character_aliases?.some((a) => a.toLowerCase() === monster.name.toLowerCase())
+        );
+
+        const monsterStatBlock = formatMonsterStatBlock(monster, url);
+
+        if (existing) {
+          const mergedDescription = mergeStatBlockIntoDescription(
+            existing.description || '',
+            monsterStatBlock,
+            '# Stat Block'
+          );
+
+          await client.characters.update(existing.id, {
+            character_name: monster.name,
+            description: mergedDescription,
+            image: monster.imageUrl,
+          });
+          showToast(`✅ Synced "${monster.name}" to Archivist!`, 'success');
+        } else {
+          await client.characters.create({
+            campaign_id: stored.selectedCampaignId,
+            character_name: monster.name,
+            type: 'NPC',
+            description: monsterStatBlock,
+            image: monster.imageUrl,
+          });
+          showToast(`✅ Imported "${monster.name}" into Archivist!`, 'success');
+        }
+        await updateCrossReferenceLink();
+      } else if (itemId || url.includes('magic-items') || url.includes('equipment')) {
         showToast('🔮 Fetching item from D&D Beyond...', 'info');
-        const item = url.includes('magic-items')
+        const item = url.includes('magic-items') && itemId
           ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
           : parseItemDom(document);
 
@@ -361,11 +456,18 @@ import {
             i.aliases?.some((a) => a.toLowerCase() === item.name.toLowerCase())
         );
 
+        const itemDetailsSection = formatItemDetails(item, url);
+
         if (existing) {
+          const mergedDesc = mergeStatBlockIntoDescription(
+            existing.description || '',
+            itemDetailsSection,
+            '# Item Details'
+          );
           await client.items.update(existing.id, {
             name: item.name,
             type: item.type,
-            description: `${item.rarity ? `*${item.rarity}* \n\n` : ''}${item.description}`,
+            description: mergedDesc,
             image: item.image,
           });
           showToast(`✅ Synced "${item.name}" to Archivist!`, 'success');
@@ -374,7 +476,7 @@ import {
             campaign_id: stored.selectedCampaignId,
             name: item.name,
             type: item.type,
-            description: `${item.rarity ? `*${item.rarity}* \n\n` : ''}${item.description}`,
+            description: itemDetailsSection,
             image: item.image,
           });
           showToast(`✅ Imported "${item.name}" into Archivist!`, 'success');
@@ -408,7 +510,7 @@ import {
     btn.className = 'archivist-inline-import-btn';
     btn.type = 'button';
     btn.innerHTML = '<span>🔮</span><span>Import Backstory from Archivist</span>';
-    btn.title = 'Fetch backstory from your Archivist campaign and insert here';
+    btn.title = 'Fetch backstory/notes from your Archivist campaign and insert here';
 
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
@@ -449,15 +551,20 @@ import {
         return;
       }
 
-      const backstory = matched.backstory || matched.description || '';
-      if (!backstory) {
-        showToast('The character in Archivist does not have any backstory text yet.', 'error');
+      // Extract only user notes/lore, stripping # Stat Block and DDB URL divider
+      let userNotes = extractUserNotesFromDescription(matched.description || '');
+      if (!userNotes) {
+        userNotes = matched.backstory || '';
+      }
+
+      if (!userNotes) {
+        showToast('The character in Archivist does not have any custom notes or backstory yet.', 'error');
         return;
       }
 
       // Populate textarea using React setter
-      setReactInputValue(textarea, backstory);
-      await navigator.clipboard.writeText(backstory).catch(() => {});
+      setReactInputValue(textarea, userNotes);
+      await navigator.clipboard.writeText(userNotes).catch(() => {});
       showToast('✨ Backstory updated from Archivist!', 'success');
     } catch (err: any) {
       showToast(`❌ Error: ${err.message}`, 'error');
