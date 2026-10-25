@@ -42,11 +42,11 @@ This compiles the extension into the `dist/` directory using Vite.
 ## Architecture
 
 This extension brings together two packages:
-- [`@astermoe/dndbeyond-parser`](https://github.com/astermoe/dndbeyond-parser): Universal extractor for D&D Beyond character and item data.
-- [`@astermoe/archivist-sdk`](https://github.com/astermoe/archivist-sdk): TypeScript client library for the Archivist REST API.
+- [`@astermoe/dndbeyond-parser`](https://github.com/astermoline/dndbeyond-parser): Universal extractor for D&D Beyond character and item data.
+- [`@astermoe/archivist-sdk`](https://github.com/astermoline/archivist-sdk): TypeScript client library for the Archivist REST API.
 
 ---
 
 ## License
 
-MIT © [astermoe](https://github.com/astermoe)
+MIT © [Aster Moline](https://aster.quest) ([@astermoline](https://github.com/astermoline))

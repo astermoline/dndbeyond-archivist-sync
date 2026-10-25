@@ -7,6 +7,17 @@
     "dev": "vite build --watch",
     "build": "vite build"
   },
+  "author": {
+    "name": "Aster Moline",
+    "email": "aster@moline.dev",
+    "url": "https://aster.quest"
+  },
+  "homepage": "https://aster.quest",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astermoline/dndbeyond-archivist-sync.git"
+  },
+  "license": "MIT",
   "dependencies": {
     "@astermoe/dndbeyond-parser": "file:../dndbeyond-parser",
     "@astermoe/archivist-sdk": "file:../archivist-sdk"
