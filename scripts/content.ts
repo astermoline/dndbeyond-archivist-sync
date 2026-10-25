@@ -16,6 +16,7 @@ import {
   formatItemDetails,
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
+  isLowResThumbnail,
 } from '../src/utils/sync-helpers';
 
 (() => {
@@ -303,9 +304,14 @@ import {
           linkAnchor.style.display = 'inline-flex';
         }
       } else if (url.includes('/magic-items/') || url.includes('/equipment/')) {
-        const item = url.includes('magic-items') && itemId
-          ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
-          : parseItemDom(document);
+        let item: ItemData;
+        try {
+          item = parseItemDom(document);
+        } catch {
+          item = itemId && url.includes('magic-items')
+            ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
+            : parseItemDom(document);
+        }
 
         const { data: itemList } = (await client.items.list({
           campaign_id: stored.selectedCampaignId,
@@ -453,9 +459,14 @@ import {
         await updateCrossReferenceLink();
       } else if (itemId || url.includes('magic-items') || url.includes('equipment')) {
         showToast('🔮 Fetching item from D&D Beyond...', 'info');
-        const item = url.includes('magic-items') && itemId
-          ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
-          : parseItemDom(document);
+        let item: ItemData;
+        try {
+          item = parseItemDom(document);
+        } catch {
+          item = itemId && url.includes('magic-items')
+            ? await fetchItemTooltipJson(itemId, { isMagicItem: true })
+            : parseItemDom(document);
+        }
 
         const { data: itemList } = (await client.items.list({
           campaign_id: stored.selectedCampaignId,
@@ -482,7 +493,7 @@ import {
             type: item.type,
             description: mergedDesc,
           };
-          if (!existing.image && item.image) {
+          if ((!existing.image || isLowResThumbnail(existing.image)) && item.image) {
             updateItemPayload.image = item.image;
           }
           await client.items.update(existing.id, updateItemPayload);

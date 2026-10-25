@@ -14,6 +14,18 @@ export function isEligibleMagicItem(rarity?: string | null): boolean {
   return ELIGIBLE_MAGIC_ITEM_RARITIES.includes(r);
 }
 
+/**
+ * Detects whether an image URL is a low-resolution cropped/thumbnail version from D&D Beyond.
+ * For example: /thumbnails/.../35/35/... or /thumbnails/.../100/100/... or ?width=150
+ */
+export function isLowResThumbnail(url?: string | null): boolean {
+  if (!url) return false;
+  return (
+    //thumbnails/d+/d+/(?:[1-9]d?|1[0-5]d)/(?:[1-9]d?|1[0-5]d)//.test(url) ||
+    /[?&](?:width|height)=(?:[1-9]d?|1[0-5]d)(?:&|$)/i.test(url)
+  );
+}
+
 export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): string {
   const abilitySummary = `| STR | DEX | CON | INT | WIS | CHA |\n| :---: | :---: | :---: | :---: | :---: | :---: |\n| ${char.abilities.strength.score} | ${char.abilities.dexterity.score} | ${char.abilities.constitution.score} | ${char.abilities.intelligence.score} | ${char.abilities.wisdom.score} | ${char.abilities.charisma.score} |`;
 

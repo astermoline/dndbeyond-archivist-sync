@@ -19,6 +19,7 @@ import {
   formatItemDetails,
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
+  isLowResThumbnail,
 } from '../src/utils/sync-helpers';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -236,10 +237,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         itemImportOptions.classList.add('hidden');
 
         try {
-          if (itemId) {
-            detectedItem = await fetchItemTooltipJson(itemId, { isMagicItem: activeTabUrl.includes('magic-items') });
-          } else {
-            detectedItem = parseItemDom(document);
+          try {
+            const [res] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id! },
+              func: () => document.body.innerHTML,
+            });
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(res.result, 'text/html');
+            detectedItem = parseItemDom(doc);
+          } catch {
+            if (itemId) {
+              detectedItem = await fetchItemTooltipJson(itemId, { isMagicItem: activeTabUrl.includes('magic-items') });
+            } else {
+              throw new Error('Unable to parse item from page.');
+            }
           }
           setEntityState('ready', 'Item Detected', detectedItem.name);
           entityMeta.textContent = `${detectedItem.type}${detectedItem.rarity ? `, ${detectedItem.rarity}` : ''}`;
@@ -441,7 +452,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                   const compItemPayload: any = {
                     description: mergedDesc,
                   };
-                  if (!existingCompItem.image && item.image) {
+                  if ((!existingCompItem.image || isLowResThumbnail(existingCompItem.image)) && item.image) {
                     compItemPayload.image = item.image;
                   }
                   await client.items.update(existingCompItem.id, compItemPayload);
@@ -507,7 +518,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             type: detectedItem.type,
             description: mergedDescription,
           };
-          if (!existingItem.image && detectedItem.image) {
+          if ((!existingItem.image || isLowResThumbnail(existingItem.image)) && detectedItem.image) {
             updateItemPayload.image = detectedItem.image;
           }
           await client.items.update(existingItem.id, updateItemPayload);
