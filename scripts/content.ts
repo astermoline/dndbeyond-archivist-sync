@@ -368,10 +368,11 @@ import {
         const statBlockSection = formatCharacterStatBlock(char, url);
 
         if (existing) {
+          const fresh = await client.characters.get(existing.id, { with_links: true });
           const mergedDescription = mergeStatBlockIntoDescription(
-            existing.description || '',
+            fresh.description || '',
             statBlockSection,
-            '# Stat Block'
+            '### Stat Block'
           );
 
           const updateCharPayload: any = {
@@ -427,7 +428,7 @@ import {
           const mergedDescription = mergeStatBlockIntoDescription(
             fresh.description || '',
             monsterStatBlock,
-            '# Stat Block'
+            '### Stat Block'
           );
 
           const updateMonPayload: any = {
@@ -474,7 +475,7 @@ import {
           const mergedDesc = mergeStatBlockIntoDescription(
             fresh.description || '',
             itemDetailsSection,
-            '# Item Details'
+            '### Item Details'
           );
           const updateItemPayload: any = {
             name: item.name,
@@ -568,7 +569,7 @@ import {
       }
 
       // Extract only user notes/lore, stripping # Stat Block and DDB URL divider
-      let userNotes = extractUserNotesFromDescription(matched.description || '');
+      let userNotes = extractUserNotesFromDescription(matched.description || '', '### Stat Block');
       if (!userNotes) {
         userNotes = matched.backstory || '';
       }

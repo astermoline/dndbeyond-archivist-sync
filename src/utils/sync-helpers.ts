@@ -17,7 +17,7 @@ export function isEligibleMagicItem(rarity?: string | null): boolean {
 export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): string {
   const abilitySummary = `| STR | DEX | CON | INT | WIS | CHA |\n| :---: | :---: | :---: | :---: | :---: | :---: |\n| ${char.abilities.strength.score} | ${char.abilities.dexterity.score} | ${char.abilities.constitution.score} | ${char.abilities.intelligence.score} | ${char.abilities.wisdom.score} | ${char.abilities.charisma.score} |`;
 
-  return `# Stat Block
+  return `### Stat Block
 
 **Level ${char.totalLevel} ${char.species} ${char.classLine}**
 
@@ -25,7 +25,7 @@ export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): s
 - **Senses:** ${char.senses.join(', ')}
 - **Languages:** ${char.languages.join(', ')}
 
-### Ability Scores
+#### Ability Scores
 ${abilitySummary}
 
 ---
@@ -39,24 +39,24 @@ export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): st
   const sections: string[] = [];
 
   if (monster.traits?.length) {
-    sections.push(`### Traits\n` + monster.traits.map((t) => `**${t.name}.** ${t.description}`).join('\n\n'));
+    sections.push(`#### Traits\n` + monster.traits.map((t) => `**${t.name}.** ${t.description}`).join('\n\n'));
   }
   if (monster.actions?.length) {
-    sections.push(`### Actions\n` + monster.actions.map((a) => `**${a.name}.** ${a.description}`).join('\n\n'));
+    sections.push(`#### Actions\n` + monster.actions.map((a) => `**${a.name}.** ${a.description}`).join('\n\n'));
   }
   if (monster.bonusActions?.length) {
-    sections.push(`### Bonus Actions\n` + monster.bonusActions.map((b) => `**${b.name}.** ${b.description}`).join('\n\n'));
+    sections.push(`#### Bonus Actions\n` + monster.bonusActions.map((b) => `**${b.name}.** ${b.description}`).join('\n\n'));
   }
   if (monster.reactions?.length) {
-    sections.push(`### Reactions\n` + monster.reactions.map((r) => `**${r.name}.** ${r.description}`).join('\n\n'));
+    sections.push(`#### Reactions\n` + monster.reactions.map((r) => `**${r.name}.** ${r.description}`).join('\n\n'));
   }
   if (monster.legendaryActions?.length) {
-    sections.push(`### Legendary Actions\n` + monster.legendaryActions.map((l) => `**${l.name}.** ${l.description}`).join('\n\n'));
+    sections.push(`#### Legendary Actions\n` + monster.legendaryActions.map((l) => `**${l.name}.** ${l.description}`).join('\n\n'));
   }
 
   const extraSections = sections.length ? '\n\n' + sections.join('\n\n') : '';
 
-  return `# Stat Block
+  return `### Stat Block
 
 **${monster.size} ${monster.type}, ${monster.alignment}**
 
@@ -65,7 +65,7 @@ export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): st
 - **Senses:** ${monster.senses.join(', ')}
 - **Languages:** ${monster.languages.join(', ')}
 
-### Ability Scores
+#### Ability Scores
 ${abilitySummary}${extraSections}
 
 ---
@@ -77,7 +77,7 @@ export function formatItemDetails(item: ItemData, ddbUrl: string): string {
     ? `\n*Requires Attunement${item.attunementDescription ? ` (${item.attunementDescription})` : ''}*`
     : '';
 
-  return `# Item Details
+  return `### Item Details
 
 **${item.rarity ? `${item.rarity} ` : ''}${item.type}**${attunement}
 
@@ -87,40 +87,50 @@ ${item.description}
 [View on D&D Beyond](${ddbUrl})`;
 }
 
+export type StatBlockHeader =
+  | '### Stat Block'
+  | '### Item Details'
+  | '# Stat Block'
+  | '# Item Details';
+
+const DNDBEYOND_DIVIDER_REGEX = /(?:(?:\r?\n)?[ \t]*---+[ \t]*)?(?:\[(?:View on )?D&D Beyond[^\]]*\]\([^\s)]+\)|\[[^\]]*\]\(https?:\/\/(?:www\.)?dndbeyond\.com\/[^\s)]+\)|https?:\/\/(?:www\.)?dndbeyond\.com\/[^\s)]+)(?:[ \t]*\r?\n[ \t]*---+)?/i;
+
 /**
  * Merges a newly formatted stat block section into an existing description.
- * If `# Stat Block` (or `# Item Details`) is present, replaces everything up to the divider link.
- * If not present, prepends the new stat block and leaves all existing content intact.
+ * Looks for ### Stat Block (or # Stat Block / Item Details) and the D&D Beyond link anywhere in the description.
+ * If found, replaces that section in-place, preserving surrounding descriptive text.
+ * If not found, adds it to the end of the description.
  */
 export function mergeStatBlockIntoDescription(
   existingDescription: string,
   newStatBlockSection: string,
-  sectionHeader: '# Stat Block' | '# Item Details' = '# Stat Block'
+  sectionHeader: StatBlockHeader = '### Stat Block'
 ): string {
   if (!existingDescription || !existingDescription.trim()) {
     return newStatBlockSection;
   }
 
   const normalized = existingDescription.replace(/\r\n/g, '\n');
-  const headerRegex = new RegExp(`^\\s*${sectionHeader.replace('#', '#+')}\\b`, 'im');
+  const label = sectionHeader.replace(/^#+\s*/, '').trim();
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headerRegex = new RegExp(`(?:^|\\n)[ \\t]*(#{1,6}[ \\t]*${escapedLabel}\\b)`, 'i');
   const headerMatch = headerRegex.exec(normalized);
 
   if (!headerMatch) {
-    // No existing stat block: prepend new stat block before existing notes
-    return `${newStatBlockSection}\n\n${normalized.trim()}`;
+    // No existing stat block: add to the end of existing description
+    return `${normalized.trim()}\n\n${newStatBlockSection}`;
   }
 
-  const headerIndex = headerMatch.index;
+  const leadingNewline = headerMatch[0].startsWith('\n') ? 1 : 0;
+  const headerStart = headerMatch.index + leadingNewline;
 
-  // Search for the D&D Beyond URL divider link after the header
-  const afterHeader = normalized.slice(headerIndex);
-  const dividerRegex = /(?:---+\s*)?\[(?:View on )?D&D Beyond[^\]]*\]\(https?:\/\/[^\s)]+\)(?:\s*---+)?/i;
-  const dividerMatch = dividerRegex.exec(afterHeader);
+  const afterHeader = normalized.slice(headerStart);
+  const dividerMatch = DNDBEYOND_DIVIDER_REGEX.exec(afterHeader);
 
   if (dividerMatch) {
-    // Found the divider! Keep everything before the header, and everything after the divider
-    const beforeBlock = normalized.slice(0, headerIndex).trimEnd();
-    const afterDivider = afterHeader.slice(dividerMatch.index + dividerMatch[0].length).trimStart();
+    // Found both header and divider link! Replace the stat block span in-place
+    const beforeBlock = normalized.slice(0, headerStart).trim();
+    const afterDivider = afterHeader.slice(dividerMatch.index + dividerMatch[0].length).trim();
 
     const parts = [
       beforeBlock,
@@ -131,32 +141,45 @@ export function mergeStatBlockIntoDescription(
     return parts.join('\n\n');
   }
 
-  // If header exists but no divider found yet, replace from header up to next major section or prepend
-  return `${newStatBlockSection}\n\n${normalized.replace(headerRegex, '').trim()}`;
+  // Header found without divider link: replace from header to end
+  const beforeBlock = normalized.slice(0, headerStart).trim();
+  const parts = [beforeBlock, newStatBlockSection].filter(Boolean);
+  return parts.join('\n\n');
 }
 
 /**
- * Extracts only user notes/lore from an Archivist description, stripping out the D&D Beyond # Stat Block section.
- * This is used when syncing BACK to D&D Beyond Notes -> Backstory.
+ * Extracts only user notes/lore from an Archivist description, stripping out the D&D Beyond stat block section.
+ * Returns any text before and/or after the stat block and divider link.
+ * Used when syncing back to D&D Beyond Notes -> Backstory.
  */
-export function extractUserNotesFromDescription(description: string): string {
-  if (!description) return '';
+export function extractUserNotesFromDescription(
+  description: string,
+  sectionHeader: StatBlockHeader = '### Stat Block'
+): string {
+  if (!description || !description.trim()) return '';
   const normalized = description.replace(/\r\n/g, '\n');
 
-  const headerRegex = /^\s*#+\s*Stat Block\b/im;
+  const label = sectionHeader.replace(/^#+\s*/, '').trim();
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headerRegex = new RegExp(`(?:^|\\n)[ \\t]*(#{1,6}[ \\t]*${escapedLabel}\\b)`, 'i');
   const headerMatch = headerRegex.exec(normalized);
+
   if (!headerMatch) {
     return normalized.trim();
   }
 
-  const afterHeader = normalized.slice(headerMatch.index);
-  const dividerRegex = /(?:---+\s*)?\[(?:View on )?D&D Beyond[^\]]*\]\(https?:\/\/[^\s)]+\)(?:\s*---+)?/i;
-  const dividerMatch = dividerRegex.exec(afterHeader);
+  const leadingNewline = headerMatch[0].startsWith('\n') ? 1 : 0;
+  const headerStart = headerMatch.index + leadingNewline;
+  const beforeBlock = normalized.slice(0, headerStart).trim();
+
+  const afterHeader = normalized.slice(headerStart);
+  const dividerMatch = DNDBEYOND_DIVIDER_REGEX.exec(afterHeader);
 
   if (dividerMatch) {
     const afterDivider = afterHeader.slice(dividerMatch.index + dividerMatch[0].length).trim();
-    return afterDivider;
+    const parts = [beforeBlock, afterDivider].filter(Boolean);
+    return parts.join('\n\n').trim();
   }
 
-  return '';
+  return beforeBlock;
 }

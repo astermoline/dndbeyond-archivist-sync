@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const mergedDescription = mergeStatBlockIntoDescription(
             existingCharacter.description || '',
             statBlockSection,
-            '# Stat Block'
+            '### Stat Block'
           );
 
           const updateCharPayload: any = {
@@ -436,7 +436,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                   const mergedDesc = mergeStatBlockIntoDescription(
                     existingCompItem.description || '',
                     itemSection,
-                    '# Item Details'
+                    '### Item Details'
                   );
                   const compItemPayload: any = {
                     description: mergedDesc,
@@ -468,7 +468,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const mergedDescription = mergeStatBlockIntoDescription(
             existingMonster.description || '',
             monsterStatBlock,
-            '# Stat Block'
+            '### Stat Block'
           );
 
           const updateMonPayload: any = {
@@ -499,7 +499,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const mergedDescription = mergeStatBlockIntoDescription(
             existingItem.description || '',
             itemDetailsSection,
-            '# Item Details'
+            '### Item Details'
           );
 
           const updateItemPayload: any = {
@@ -535,12 +535,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 8. Update D&D Beyond Backstory from Archivist (stripping # Stat Block)
+  // 8. Update D&D Beyond Backstory from Archivist (stripping ### Stat Block)
   updateBackstoryBtn.addEventListener('click', async () => {
     if (!existingCharacter) return;
 
-    // Extract user notes, excluding # Stat Block and the divider URL
-    let backstory = extractUserNotesFromDescription(existingCharacter.description || '');
+    // Extract user notes, excluding ### Stat Block and the divider URL
+    let backstory = extractUserNotesFromDescription(existingCharacter.description || '', '### Stat Block');
     if (!backstory) {
       backstory = existingCharacter.backstory || '';
     }
