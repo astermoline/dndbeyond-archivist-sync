@@ -19,8 +19,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@astermoe/dndbeyond-parser": "file:../dndbeyond-parser",
-    "@astermoe/archivist-sdk": "file:../archivist-sdk"
+    "@astermoe/dndbeyond-parser": "^1.0.0",
+    "@astermoe/archivist-sdk": "^1.0.0"
   },
   "devDependencies": {
     "typescript": "^5.4.5",
