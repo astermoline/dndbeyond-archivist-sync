@@ -26,8 +26,31 @@ export function isLowResThumbnail(url?: string | null): boolean {
   );
 }
 
+/**
+ * Formats tabular data into Archivist's native [TABLE] markup syntax.
+ * Example output:
+ * [TABLE]
+ * Columns: STR | DEX | CON | INT | WIS | CHA
+ * Row 1: 8 | 15 | 14 | 10 | 12 | 19
+ * [/TABLE]
+ */
+export function formatArchivistTable(columns: string[], rows: (string | number)[][]): string {
+  const colLine = `Columns: ${columns.join(' | ')}`;
+  const rowLines = rows.map((row, idx) => `Row ${idx + 1}: ${row.join(' | ')}`);
+  return `[TABLE]\n${colLine}\n${rowLines.join('\n')}\n[/TABLE]`;
+}
+
 export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): string {
-  const abilitySummary = `| STR | DEX | CON | INT | WIS | CHA |\n| :---: | :---: | :---: | :---: | :---: | :---: |\n| ${char.abilities.strength.score} | ${char.abilities.dexterity.score} | ${char.abilities.constitution.score} | ${char.abilities.intelligence.score} | ${char.abilities.wisdom.score} | ${char.abilities.charisma.score} |`;
+  const abilityColumns = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+  const abilityRow = [
+    char.abilities.strength.score,
+    char.abilities.dexterity.score,
+    char.abilities.constitution.score,
+    char.abilities.intelligence.score,
+    char.abilities.wisdom.score,
+    char.abilities.charisma.score,
+  ];
+  const abilitySummary = formatArchivistTable(abilityColumns, [abilityRow]);
 
   return `### Stat Block
 
@@ -46,7 +69,16 @@ ${abilitySummary}
 
 export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): string {
   const ab = monster.abilities;
-  const abilitySummary = `| STR | DEX | CON | INT | WIS | CHA |\n| :---: | :---: | :---: | :---: | :---: | :---: |\n| ${ab.strength.score} (${ab.strength.modifier}) | ${ab.dexterity.score} (${ab.dexterity.modifier}) | ${ab.constitution.score} (${ab.constitution.modifier}) | ${ab.intelligence.score} (${ab.intelligence.modifier}) | ${ab.wisdom.score} (${ab.wisdom.modifier}) | ${ab.charisma.score} (${ab.charisma.modifier}) |`;
+  const abilityColumns = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+  const abilityRow = [
+    `${ab.strength.score} (${ab.strength.modifier})`,
+    `${ab.dexterity.score} (${ab.dexterity.modifier})`,
+    `${ab.constitution.score} (${ab.constitution.modifier})`,
+    `${ab.intelligence.score} (${ab.intelligence.modifier})`,
+    `${ab.wisdom.score} (${ab.wisdom.modifier})`,
+    `${ab.charisma.score} (${ab.charisma.modifier})`,
+  ];
+  const abilitySummary = formatArchivistTable(abilityColumns, [abilityRow]);
 
   const sections: string[] = [];
 
