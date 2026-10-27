@@ -40,17 +40,30 @@ export function formatArchivistTable(columns: string[], rows: (string | number)[
   return `[TABLE]\n${colLine}\n${rowLines.join('\n')}\n[/TABLE]`;
 }
 
+/**
+ * Formats character or monster ability scores into a single-line string.
+ * Example: STR: 8 (-1) | DEX: 13 (+1) | CON: 15 (+2) | INT: 20 (+5) | WIS: 15 (+2) | CHR: 20 (+5)
+ */
+export function formatAbilityScoresLine(abilities: {
+  strength: { score: number; modifier: string };
+  dexterity: { score: number; modifier: string };
+  constitution: { score: number; modifier: string };
+  intelligence: { score: number; modifier: string };
+  wisdom: { score: number; modifier: string };
+  charisma: { score: number; modifier: string };
+}): string {
+  return [
+    `STR: ${abilities.strength.score} (${abilities.strength.modifier})`,
+    `DEX: ${abilities.dexterity.score} (${abilities.dexterity.modifier})`,
+    `CON: ${abilities.constitution.score} (${abilities.constitution.modifier})`,
+    `INT: ${abilities.intelligence.score} (${abilities.intelligence.modifier})`,
+    `WIS: ${abilities.wisdom.score} (${abilities.wisdom.modifier})`,
+    `CHR: ${abilities.charisma.score} (${abilities.charisma.modifier})`,
+  ].join(' | ');
+}
+
 export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): string {
-  const abilityColumns = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
-  const abilityRow = [
-    char.abilities.strength.score,
-    char.abilities.dexterity.score,
-    char.abilities.constitution.score,
-    char.abilities.intelligence.score,
-    char.abilities.wisdom.score,
-    char.abilities.charisma.score,
-  ];
-  const abilitySummary = formatArchivistTable(abilityColumns, [abilityRow]);
+  const abilitySummary = formatAbilityScoresLine(char.abilities);
 
   return `### Stat Block
 
@@ -68,17 +81,7 @@ ${abilitySummary}
 }
 
 export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): string {
-  const ab = monster.abilities;
-  const abilityColumns = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
-  const abilityRow = [
-    `${ab.strength.score} (${ab.strength.modifier})`,
-    `${ab.dexterity.score} (${ab.dexterity.modifier})`,
-    `${ab.constitution.score} (${ab.constitution.modifier})`,
-    `${ab.intelligence.score} (${ab.intelligence.modifier})`,
-    `${ab.wisdom.score} (${ab.wisdom.modifier})`,
-    `${ab.charisma.score} (${ab.charisma.modifier})`,
-  ];
-  const abilitySummary = formatArchivistTable(abilityColumns, [abilityRow]);
+  const abilitySummary = formatAbilityScoresLine(monster.abilities);
 
   const sections: string[] = [];
 
