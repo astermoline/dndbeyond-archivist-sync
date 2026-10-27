@@ -17,6 +17,9 @@ import {
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
   isLowResThumbnail,
+  findOrCreateJournalFolder,
+  formatCharacterJournalMarkdown,
+  syncCharacterJournalEntry,
 } from "../src/utils/sync-helpers";
 
 (() => {
@@ -997,7 +1000,6 @@ import {
           }
           await client.characters.update(existing.id, updatePayload);
           matchedEntity = { campaign: targetCampaign, entity: existing };
-          showToast(`✅ Synced "${char.name}" to ${targetCampaign.title}!`, "success");
         } else {
           const created = await client.characters.create({
             campaign_id: targetCampaignId,
@@ -1007,7 +1009,33 @@ import {
             image: char.avatarUrl,
           });
           matchedEntity = { campaign: targetCampaign, entity: created };
-          showToast(`✅ Imported "${char.name}" into ${targetCampaign.title}!`, "success");
+        }
+
+        // Full Markdown Character Sheet Journal Sync:
+        // Also create/update a journal entry in "Character Sheets" folder with the full markdown character sheet
+        try {
+          showToast("📖 Syncing full Character Sheet journal...", "info");
+          const folderId = await findOrCreateJournalFolder(
+            stored.archivistApiKey,
+            targetCampaignId,
+            "Character Sheets"
+          );
+          const journalMarkdown = formatCharacterJournalMarkdown(char);
+          const journalResult = await syncCharacterJournalEntry(
+            stored.archivistApiKey,
+            targetCampaignId,
+            folderId,
+            char.name,
+            journalMarkdown
+          );
+          console.log(`[Archives Beyond] Character Sheet journal ${journalResult.action}:`, journalResult.id);
+          showToast(
+            `✅ Synced "${char.name}" & Character Sheet journal to ${targetCampaign.title}!`,
+            "success"
+          );
+        } catch (journalErr) {
+          console.error("[Archives Beyond] Failed to sync journal entry:", journalErr);
+          showToast(`✅ Synced "${char.name}" to ${targetCampaign.title}! (Journal sync had an issue)`, "warning");
         }
 
         // Optional: Import equipped magic items

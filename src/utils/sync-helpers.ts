@@ -1,4 +1,4 @@
-import { CharacterData, MonsterData, ItemData } from '@astermoe/dndbeyond-parser';
+import { type CharacterData, type MonsterData, type ItemData, characterToMarkdown } from '@astermoe/dndbeyond-parser';
 
 export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
   'uncommon',
@@ -225,4 +225,200 @@ export function extractUserNotesFromDescription(
   }
 
   return beforeBlock;
+}
+
+/**
+ * Converts standard Markdown pipe tables into Archivist's [TABLE]...[/TABLE] syntax.
+ */
+export function convertMarkdownTablesToArchivist(text: string): string {
+  const tableRegex = /((?:^[ 	]*\|?[^\n|]+\|[^\n]+\|?[ 	]*\r?\n)(?:^[ 	]*\|?[ 	]*:?-+:?[ 	]*(?:\|[ 	]*:?-+:?[ 	]*)+\|?[ 	]*\r?\n)(?:^[ 	]*\|?[^\n|]+\|[^\n]+\|?[ 	]*(?:\r?\n|$))+)/gm;
+
+  return text.replace(tableRegex, (match) => {
+    const lines = match.trim().split(/\r?\n/);
+    if (lines.length < 3) return match;
+
+    const parseCells = (line: string) => {
+      const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+      return trimmed.split('|').map((c) => c.trim());
+    };
+
+    const header = parseCells(lines[0]);
+    const dataRows = lines.slice(2).map(parseCells);
+
+    const colLine = `Columns: ${header.join(' | ')}`;
+    const rowLines = dataRows.map((row, idx) => `Row ${idx + 1}: ${row.join(' | ')}`);
+
+    return `[TABLE]\n${colLine}\n${rowLines.join('\n')}\n[/TABLE]\n`;
+  });
+}
+
+/**
+ * Formats a full character sheet for an Archivist journal entry.
+ * Strips Obsidian-specific YAML frontmatter, prefixes with a [[Character Name]] wikilink,
+ * and converts pipe tables into Archivist's [TABLE] syntax.
+ */
+export function formatCharacterJournalMarkdown(char: CharacterData): string {
+  const rawMd = characterToMarkdown(char);
+  const bodyMd = rawMd.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, '').trim();
+  const archivistMd = convertMarkdownTablesToArchivist(bodyMd);
+  return `[\[${char.name}\]\]\n\n${archivistMd}`.trim() + '\n';
+}
+
+/**
+ * Finds or creates a Journal Folder in Archivist by name.
+ */
+export async function findOrCreateJournalFolder(
+  apiKey: string,
+  campaignId: string,
+  folderName: string,
+  baseUrl = 'https://api.myarchivist.ai'
+): Promise<string | null> {
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const headers = {
+    'x-api-key': apiKey,
+    Accept: 'application/json',
+  };
+
+  try {
+    const listRes = await fetch(`${cleanBase}/v1/journal-folders?campaign_id=${encodeURIComponent(campaignId)}`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (listRes.ok) {
+      const data = await listRes.json();
+      const folders: any[] = Array.isArray(data) ? data : data?.data || [];
+      const match = folders.find(
+        (f) =>
+          f.name?.trim().toLowerCase() === folderName.trim().toLowerCase() ||
+          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase()
+      );
+      if (match?.id) {
+        return match.id;
+      }
+    }
+  } catch (err) {
+    console.warn('[Archives Beyond] Could not list journal folders:', err);
+  }
+
+  // Not found: create the folder
+  try {
+    const createRes = await fetch(`${cleanBase}/v1/journal-folders`, {
+      method: 'POST',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        worldId: campaignId,
+        name: folderName,
+        path: `/${folderName}`,
+      }),
+    });
+
+    if (createRes.ok) {
+      const created = await createRes.json();
+      return created.id || created.data?.id || null;
+    }
+  } catch (err) {
+    console.warn('[Archives Beyond] Failed to create journal folder:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Creates or updates a journal entry in Archivist with the given character's full markdown sheet.
+ */
+export async function syncCharacterJournalEntry(
+  apiKey: string,
+  campaignId: string,
+  folderId: string | null,
+  characterName: string,
+  content: string,
+  baseUrl = 'https://api.myarchivist.ai'
+): Promise<{ id: string; action: 'created' | 'updated' }> {
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const headers = {
+    'x-api-key': apiKey,
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  };
+
+  let existingId: string | null = null;
+  try {
+    const listRes = await fetch(
+      `${cleanBase}/v1/journals?campaign_id=${encodeURIComponent(campaignId)}&size=100&with_links=true&format=markdown`,
+      {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const entries: any[] = Array.isArray(listData) ? listData : listData?.data || [];
+      const match = entries.find(
+        (e) => e.title?.trim().toLowerCase() === characterName.trim().toLowerCase()
+      );
+      if (match?.id) {
+        existingId = match.id;
+      }
+    }
+  } catch (err) {
+    console.warn('[Archives Beyond] Error searching journals:', err);
+  }
+
+  if (existingId) {
+    const putPayload: any = {
+      id: existingId,
+      title: characterName,
+      content,
+      status: 'published',
+    };
+    if (folderId) {
+      putPayload.folderId = folderId;
+    }
+
+    const updateRes = await fetch(`${cleanBase}/v1/journals`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(putPayload),
+    });
+
+    if (!updateRes.ok) {
+      const errText = await updateRes.text().catch(() => '');
+      throw new Error(`Failed to update journal entry (${updateRes.status}): ${errText}`);
+    }
+
+    return { id: existingId, action: 'updated' };
+  } else {
+    const postPayload: any = {
+      worldId: campaignId,
+      title: characterName,
+      content,
+      status: 'published',
+    };
+    if (folderId) {
+      postPayload.folderId = folderId;
+    }
+
+    const createRes = await fetch(`${cleanBase}/v1/journals`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(postPayload),
+    });
+
+    if (!createRes.ok) {
+      const errText = await createRes.text().catch(() => '');
+      throw new Error(`Failed to create journal entry (${createRes.status}): ${errText}`);
+    }
+
+    const created = await createRes.json();
+    const newId = created.id || created.data?.id || '';
+    return { id: newId, action: 'created' };
+  }
 }
