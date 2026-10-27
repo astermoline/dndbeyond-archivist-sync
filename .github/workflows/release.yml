@@ -27,6 +27,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          export VERSION
           echo "Releasing version $VERSION"
           npm version $VERSION --no-git-tag-version
           node -e "
@@ -34,8 +35,9 @@ jobs:
             const manifestPath = 'public/manifest.json';
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             manifest.version = process.env.VERSION;
+            if (!manifest.version) throw new Error('VERSION is undefined');
             fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-            console.log('Updated public/manifest.json to version', process.env.VERSION);
+            console.log('Updated public/manifest.json to version', manifest.version);
           "
 
       - name: Build extension
@@ -65,6 +67,6 @@ jobs:
             echo "::warning ::Chrome Web Store credentials (CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN, CHROME_PUBLISHER_ID) are not set. Skipping Web Store upload."
             exit 0
           fi
-          npx --yes chrome-webstore-upload-cli upload \
+          npx --yes chrome-webstore-upload-cli \
             --source "archives-beyond-${{ env.VERSION }}.zip" \
-            --auto-publish
+            --extension-id "$EXTENSION_ID"
