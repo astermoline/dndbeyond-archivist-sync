@@ -330,12 +330,478 @@ export async function findOrCreateJournalFolder(
 /**
  * Creates or updates a journal entry in Archivist with the given character's full markdown sheet.
  */
+export interface LexicalInlineNode {
+  [key: string]: any;
+}
+
+export function parseInlineMarkdown(
+  text: string,
+  options: { characterId?: string; characterName?: string } = {}
+): LexicalInlineNode[] {
+  const nodes: LexicalInlineNode[] = [];
+  let remaining = text;
+
+  const inlineRegex =
+    /(\[\[([^\]|]+)(?:\|([^\]]+))?\]\])|(\[([^\]]+)\]\(([^)]+)\))|(\*\*\*([^*]+)\*\*\*)|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(~~([^~]+)~~)/;
+
+  while (remaining.length > 0) {
+    const match = remaining.match(inlineRegex);
+    if (!match) {
+      nodes.push({
+        mode: 'normal',
+        text: remaining,
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 0,
+        version: 1,
+      });
+      break;
+    }
+
+    const matchIndex = match.index!;
+    if (matchIndex > 0) {
+      nodes.push({
+        mode: 'normal',
+        text: remaining.slice(0, matchIndex),
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 0,
+        version: 1,
+      });
+    }
+
+    if (match[1]) {
+      // Wikilink: [[Target]] or [[Target|Alias]]
+      const target = match[2].trim();
+      const alias = (match[3] || target).trim();
+      if (
+        options.characterId &&
+        (target.toLowerCase() === options.characterName?.toLowerCase() ||
+          alias.toLowerCase() === options.characterName?.toLowerCase())
+      ) {
+        nodes.push({
+          toId: options.characterId,
+          type: 'wikilink',
+          alias: alias,
+          toType: 'Character',
+          version: 1,
+          characterKind: 'PC',
+        });
+      } else {
+        nodes.push({
+          mode: 'normal',
+          text: match[0],
+          type: 'text',
+          style: '',
+          detail: 0,
+          format: 0,
+          version: 1,
+        });
+      }
+    } else if (match[4]) {
+      // Link: [text](url)
+      nodes.push({
+        type: 'link',
+        url: match[6],
+        rel: 'noopener noreferrer',
+        title: null,
+        format: '',
+        indent: 0,
+        target: '_blank',
+        version: 1,
+        children: [
+          {
+            mode: 'normal',
+            text: match[5],
+            type: 'text',
+            style: '',
+            detail: 0,
+            format: 0,
+            version: 1,
+          },
+        ],
+        direction: null,
+      });
+    } else if (match[7]) {
+      // Bold + Italic: format: 3 (1 | 2)
+      nodes.push({
+        mode: 'normal',
+        text: match[8],
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 3,
+        version: 1,
+      });
+    } else if (match[9]) {
+      // Bold: format: 1
+      nodes.push({
+        mode: 'normal',
+        text: match[10],
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 1,
+        version: 1,
+      });
+    } else if (match[11]) {
+      // Italic: format: 2
+      nodes.push({
+        mode: 'normal',
+        text: match[12],
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 2,
+        version: 1,
+      });
+    } else if (match[13]) {
+      // Code: format: 16
+      nodes.push({
+        mode: 'normal',
+        text: match[14],
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 16,
+        version: 1,
+      });
+    } else if (match[15]) {
+      // Strikethrough: format: 4
+      nodes.push({
+        mode: 'normal',
+        text: match[16],
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 4,
+        version: 1,
+      });
+    }
+
+    remaining = remaining.slice(matchIndex + match[0].length);
+  }
+
+  return nodes.length > 0
+    ? nodes
+    : [
+        {
+          mode: 'normal',
+          text: '',
+          type: 'text',
+          style: '',
+          detail: 0,
+          format: 0,
+          version: 1,
+        },
+      ];
+}
+
+export function createLexicalParagraph(children: LexicalInlineNode[]) {
+  return {
+    type: 'paragraph',
+    format: '',
+    indent: 0,
+    version: 1,
+    children,
+    direction: null,
+    textStyle: '',
+    textFormat: 0,
+  };
+}
+
+export function createLexicalTableCell(children: LexicalInlineNode[], isHeader = false) {
+  return {
+    type: 'tablecell',
+    format: '',
+    indent: 0,
+    colSpan: 1,
+    rowSpan: 1,
+    version: 1,
+    headerState: isHeader ? 1 : 0,
+    backgroundColor: null,
+    children: [createLexicalParagraph(children)],
+    direction: null,
+  };
+}
+
+export function createLexicalTable(
+  columns: string[],
+  rows: string[][],
+  options: { characterId?: string; characterName?: string } = {}
+) {
+  const tableRows: any[] = [];
+
+  if (columns && columns.length > 0) {
+    const headerCells = columns.map((col) =>
+      createLexicalTableCell(parseInlineMarkdown(col.trim(), options), true)
+    );
+    tableRows.push({
+      type: 'tablerow',
+      format: '',
+      indent: 0,
+      version: 1,
+      children: headerCells,
+      direction: null,
+    });
+  }
+
+  for (const row of rows) {
+    const cells = row.map((cell) =>
+      createLexicalTableCell(parseInlineMarkdown(cell.trim(), options), false)
+    );
+    tableRows.push({
+      type: 'tablerow',
+      format: '',
+      indent: 0,
+      version: 1,
+      children: cells,
+      direction: null,
+    });
+  }
+
+  return {
+    type: 'table',
+    format: '',
+    indent: 0,
+    version: 1,
+    children: tableRows,
+    direction: null,
+  };
+}
+
+/**
+ * Converts Markdown (with headings, lists, bold/italic, tables, links, wikilinks)
+ * into a Lexical document AST for Archivist rich-text editing.
+ */
+export function markdownToLexical(
+  markdownText: string,
+  options: { characterId?: string; characterName?: string } = {}
+): { root: any } {
+  const lines = markdownText.split(/\r?\n/);
+  const children: any[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    // Skip standalone image tags (e.g. ![Name](url))
+    if (/^!\[.*?\]\(.*?\)$/.test(trimmed)) {
+      i++;
+      continue;
+    }
+
+    // Skip horizontal rules
+    if (/^(?:---|\*\*\*|___)$/.test(trimmed)) {
+      i++;
+      continue;
+    }
+
+    // 1. Archivist [TABLE] ... [/TABLE]
+    if (trimmed.startsWith('[TABLE]')) {
+      i++;
+      let columns: string[] = [];
+      const rows: string[][] = [];
+      while (i < lines.length && !lines[i].trim().startsWith('[/TABLE]')) {
+        const tLine = lines[i].trim();
+        if (tLine.toLowerCase().startsWith('columns:')) {
+          columns = tLine.slice(8).split('|').map((c) => c.trim());
+        } else if (/^row\s+\d+:/i.test(tLine)) {
+          const colonIdx = tLine.indexOf(':');
+          const rowData = tLine.slice(colonIdx + 1).split('|').map((c) => c.trim());
+          rows.push(rowData);
+        }
+        i++;
+      }
+      if (i < lines.length && lines[i].trim().startsWith('[/TABLE]')) {
+        i++;
+      }
+      children.push(createLexicalTable(columns, rows, options));
+      continue;
+    }
+
+    // 2. Markdown Pipe Tables (| col | col |)
+    if (
+      /^[ \t]*\|?[^\n|]+\|[^\n]+\|?[ \t]*$/.test(line) &&
+      i + 1 < lines.length &&
+      /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/.test(lines[i + 1])
+    ) {
+      const parseCells = (l: string) =>
+        l
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
+      const header = parseCells(lines[i]);
+      i += 2;
+      const dataRows: string[][] = [];
+      while (i < lines.length && /^[ \t]*\|?[^\n|]+\|[^\n]+\|?[ \t]*$/.test(lines[i])) {
+        dataRows.push(parseCells(lines[i]));
+        i++;
+      }
+      children.push(createLexicalTable(header, dataRows, options));
+      continue;
+    }
+
+    // 3. Headings (# Heading)
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2].trim();
+      children.push({
+        type: 'heading',
+        tag: `h${level}`,
+        format: '',
+        indent: 0,
+        version: 1,
+        children: parseInlineMarkdown(headingText, options),
+        direction: null,
+      });
+      i++;
+      continue;
+    }
+
+    // 4. Bullet lists (- item or * item)
+    if (/^[-*]\s+(.+)$/.test(line)) {
+      const listItems: any[] = [];
+      while (i < lines.length && /^[-*]\s+(.+)$/.test(lines[i])) {
+        const itemText = lines[i].replace(/^[-*]\s+/, '').trim();
+        listItems.push({
+          type: 'listitem',
+          value: listItems.length + 1,
+          format: '',
+          indent: 0,
+          version: 1,
+          children: parseInlineMarkdown(itemText, options),
+          direction: null,
+        });
+        i++;
+      }
+      children.push({
+        type: 'list',
+        listType: 'bullet',
+        start: 1,
+        tag: 'ul',
+        format: '',
+        indent: 0,
+        version: 1,
+        children: listItems,
+        direction: null,
+      });
+      continue;
+    }
+
+    // 5. Numbered lists (1. item)
+    if (/^\d+\.\s+(.+)$/.test(line)) {
+      const listItems: any[] = [];
+      while (i < lines.length && /^\d+\.\s+(.+)$/.test(lines[i])) {
+        const itemText = lines[i].replace(/^\d+\.\s+/, '').trim();
+        listItems.push({
+          type: 'listitem',
+          value: listItems.length + 1,
+          format: '',
+          indent: 0,
+          version: 1,
+          children: parseInlineMarkdown(itemText, options),
+          direction: null,
+        });
+        i++;
+      }
+      children.push({
+        type: 'list',
+        listType: 'number',
+        start: 1,
+        tag: 'ol',
+        format: '',
+        indent: 0,
+        version: 1,
+        children: listItems,
+        direction: null,
+      });
+      continue;
+    }
+
+    // 6. Blockquote (> quote)
+    if (/^>\s*(.*)$/.test(line)) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && /^>\s*(.*)$/.test(lines[i])) {
+        quoteLines.push(lines[i].replace(/^>\s*/, '').trim());
+        i++;
+      }
+      children.push({
+        type: 'quote',
+        format: '',
+        indent: 0,
+        version: 1,
+        children: parseInlineMarkdown(quoteLines.join(' '), options),
+        direction: null,
+      });
+      continue;
+    }
+
+    // 7. Regular paragraph
+    const paraLines: string[] = [];
+    while (i < lines.length) {
+      const pLine = lines[i];
+      const pTrimmed = pLine.trim();
+      if (!pTrimmed) break;
+      if (
+        pTrimmed.startsWith('#') ||
+        pTrimmed.startsWith('[TABLE]') ||
+        pTrimmed.startsWith('>') ||
+        /^[-*]\s+/.test(pTrimmed) ||
+        /^\d+\.\s+/.test(pTrimmed) ||
+        /^(?:---|\*\*\*|___)$/.test(pTrimmed) ||
+        (/^[ \t]*\|?[^\n|]+\|[^\n]+\|?[ \t]*$/.test(pLine) &&
+          i + 1 < lines.length &&
+          /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/.test(lines[i + 1]))
+      ) {
+        break;
+      }
+      paraLines.push(pTrimmed);
+      i++;
+    }
+
+    if (paraLines.length > 0) {
+      children.push(createLexicalParagraph(parseInlineMarkdown(paraLines.join(' '), options)));
+    } else {
+      i++;
+    }
+  }
+
+  return {
+    root: {
+      type: 'root',
+      format: '',
+      indent: 0,
+      version: 1,
+      children,
+      direction: null,
+    },
+  };
+}
+
+/**
+ * Creates or updates a journal entry in Archivist with the given character's full markdown sheet.
+ * Passes both plain-text/markdown content AND contentRich (Lexical document AST)
+ * so the web app's Lexical editor renders rich text while markdown export remains supported.
+ */
 export async function syncCharacterJournalEntry(
   apiKey: string,
   campaignId: string,
   folderId: string | null,
   characterName: string,
   content: string,
+  contentRich?: any,
   baseUrl = 'https://api.myarchivist.ai'
 ): Promise<{ id: string; action: 'created' | 'updated' }> {
   const cleanBase = baseUrl.replace(/\/+$/, '');
@@ -382,6 +848,9 @@ export async function syncCharacterJournalEntry(
     if (folderId) {
       putPayload.folderId = folderId;
     }
+    if (contentRich) {
+      putPayload.contentRich = contentRich;
+    }
 
     const updateRes = await fetch(`${cleanBase}/v1/journals`, {
       method: 'PUT',
@@ -404,6 +873,9 @@ export async function syncCharacterJournalEntry(
     };
     if (folderId) {
       postPayload.folderId = folderId;
+    }
+    if (contentRich) {
+      postPayload.contentRich = contentRich;
     }
 
     const createRes = await fetch(`${cleanBase}/v1/journals`, {
