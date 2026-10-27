@@ -70,11 +70,9 @@ export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): s
 **Level ${char.totalLevel} ${char.species} ${char.classLine}**
 
 - **AC:** ${char.ac.value} | **HP:** ${char.hp.value}/${char.hp.max} | **Speed:** ${char.speed}
+- **Ability Scores:** ${abilitySummary}
 - **Senses:** ${char.senses.join(', ')}
 - **Languages:** ${char.languages.join(', ')}
-
-#### Ability Scores
-${abilitySummary}
 
 ---
 [View on D&D Beyond](${ddbUrl})`;
@@ -109,11 +107,9 @@ export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): st
 
 - **CR:** ${monster.cr} (${monster.xp} XP)
 - **AC:** ${monster.ac.value}${monster.ac.formula ? ` (${monster.ac.formula})` : ''} | **HP:** ${monster.hp.value}${monster.hp.formula ? ` (${monster.hp.formula})` : ''} | **Speed:** ${monster.speed}
+- **Ability Scores:** ${abilitySummary}
 - **Senses:** ${monster.senses.join(', ')}
-- **Languages:** ${monster.languages.join(', ')}
-
-#### Ability Scores
-${abilitySummary}${extraSections}
+- **Languages:** ${monster.languages.join(', ')}${extraSections}
 
 ---
 [View on D&D Beyond](${ddbUrl})`;
