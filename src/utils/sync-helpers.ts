@@ -279,6 +279,7 @@ export async function findOrCreateJournalFolder(
     Accept: 'application/json',
   };
 
+  // 1. Check existing folders
   try {
     const listRes = await fetch(`${cleanBase}/v1/journal-folders?campaign_id=${encodeURIComponent(campaignId)}`, {
       method: 'GET',
@@ -287,21 +288,24 @@ export async function findOrCreateJournalFolder(
 
     if (listRes.ok) {
       const data = await listRes.json();
-      const folders: any[] = Array.isArray(data) ? data : data?.data || [];
+      const folders: any[] = Array.isArray(data) ? data : data?.data || data?.folders || [];
       const match = folders.find(
         (f) =>
           f.name?.trim().toLowerCase() === folderName.trim().toLowerCase() ||
-          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase()
+          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase() ||
+          f.path?.trim().toLowerCase() === folderName.trim().toLowerCase()
       );
       if (match?.id) {
         return match.id;
       }
+    } else {
+      console.warn('[Archives Beyond] Could not list journal folders, status:', listRes.status);
     }
   } catch (err) {
-    console.warn('[Archives Beyond] Could not list journal folders:', err);
+    console.warn('[Archives Beyond] Error listing journal folders:', err);
   }
 
-  // Not found: create the folder
+  // 2. Not found: create the folder
   try {
     const createRes = await fetch(`${cleanBase}/v1/journal-folders`, {
       method: 'POST',
@@ -311,17 +315,53 @@ export async function findOrCreateJournalFolder(
       },
       body: JSON.stringify({
         worldId: campaignId,
+        campaign_id: campaignId,
         name: folderName,
         path: `/${folderName}`,
+        parentId: null,
       }),
     });
 
     if (createRes.ok) {
       const created = await createRes.json();
-      return created.id || created.data?.id || null;
+      const folderId =
+        created?.id ||
+        created?.data?.id ||
+        created?.folder?.id ||
+        created?.entry?.id ||
+        null;
+      if (folderId) {
+        return folderId;
+      }
+    } else {
+      const errText = await createRes.text().catch(() => '');
+      console.warn(`[Archives Beyond] Failed to create journal folder (${createRes.status}):`, errText);
     }
   } catch (err) {
-    console.warn('[Archives Beyond] Failed to create journal folder:', err);
+    console.warn('[Archives Beyond] Error creating journal folder:', err);
+  }
+
+  // 3. Fallback: re-fetch folders in case creation succeeded or folder existed with alternate path
+  try {
+    const listRes2 = await fetch(`${cleanBase}/v1/journal-folders?campaign_id=${encodeURIComponent(campaignId)}`, {
+      method: 'GET',
+      headers,
+    });
+    if (listRes2.ok) {
+      const data2 = await listRes2.json();
+      const folders2: any[] = Array.isArray(data2) ? data2 : data2?.data || data2?.folders || [];
+      const match2 = folders2.find(
+        (f) =>
+          f.name?.trim().toLowerCase() === folderName.trim().toLowerCase() ||
+          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase() ||
+          f.path?.trim().toLowerCase() === folderName.trim().toLowerCase()
+      );
+      if (match2?.id) {
+        return match2.id;
+      }
+    }
+  } catch (err) {
+    console.warn('[Archives Beyond] Fallback folder listing failed:', err);
   }
 
   return null;

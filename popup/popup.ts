@@ -20,6 +20,10 @@ import {
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
   isLowResThumbnail,
+  findOrCreateJournalFolder,
+  formatCharacterJournalMarkdown,
+  syncCharacterJournalEntry,
+  markdownToLexical,
 } from '../src/utils/sync-helpers';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -461,6 +465,35 @@ document.addEventListener('DOMContentLoaded', async () => {
           });
           existingCharacter = created;
           showStatus(syncResult, `Imported "${detectedChar.name}" into Archivist!`, 'success');
+        }
+
+        // Full Markdown Character Sheet Journal Sync:
+        try {
+          const storedKey = (await chrome.storage.sync.get(['archivistApiKey'])).archivistApiKey;
+          if (storedKey && selectedCampaignId) {
+            const folderId = await findOrCreateJournalFolder(
+              storedKey,
+              selectedCampaignId,
+              'Character Sheets'
+            );
+            const journalMarkdown = formatCharacterJournalMarkdown(detectedChar);
+            const characterEntityId = existingCharacter?.id;
+            const contentRich = markdownToLexical(journalMarkdown, {
+              characterId: characterEntityId,
+              characterName: detectedChar.name,
+            });
+            await syncCharacterJournalEntry(
+              storedKey,
+              selectedCampaignId,
+              folderId,
+              detectedChar.name,
+              journalMarkdown,
+              contentRich
+            );
+            console.log('[Archives Beyond Popup] Character Sheet journal synced to folder:', folderId);
+          }
+        } catch (journalErr) {
+          console.error('[Archives Beyond Popup] Failed to sync journal entry:', journalErr);
         }
 
         // Optional: Import equipped magic items (Uncommon or higher only)
