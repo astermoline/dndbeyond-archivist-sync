@@ -65,9 +65,5 @@ jobs:
             exit 0
           fi
           npx --yes chrome-webstore-upload-cli upload \
-            --extension-id "$EXTENSION_ID" \
             --source "archives-beyond-${{ env.VERSION }}.zip" \
-            --client-id "$CLIENT_ID" \
-            --client-secret "$CLIENT_SECRET" \
-            --refresh-token "$REFRESH_TOKEN" \
             --auto-publish
