@@ -1,6 +1,6 @@
 {
   "name": "dndbeyond-archivist-sync",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Chrome extension to synchronize D&D Beyond characters and items with myarchivist.ai campaigns.",
   "type": "module",
   "scripts": {

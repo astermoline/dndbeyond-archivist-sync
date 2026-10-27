@@ -1,0 +1,73 @@
+name: Release Chrome Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync version from tag
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Releasing version $VERSION"
+          npm version $VERSION --no-git-tag-version
+          node -e "
+            const fs = require('fs');
+            const manifestPath = 'public/manifest.json';
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            manifest.version = process.env.VERSION;
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+            console.log('Updated public/manifest.json to version', process.env.VERSION);
+          "
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Package extension ZIP
+        run: |
+          cd dist
+          zip -r ../archives-beyond-${{ env.VERSION }}.zip .
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: archives-beyond-${{ env.VERSION }}.zip
+          generate_release_notes: true
+
+      - name: Upload and Publish to Chrome Web Store
+        env:
+          EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID || 'dfadembcpmgppeihgadjhbmfalbbngac' }}
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ] || [ -z "$REFRESH_TOKEN" ]; then
+            echo "::warning ::Chrome Web Store credentials (CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN) are not set. Skipping Web Store upload."
+            exit 0
+          fi
+          npx --yes chrome-webstore-upload-cli upload \
+            --extension-id "$EXTENSION_ID" \
+            --source "archives-beyond-${{ env.VERSION }}.zip" \
+            --client-id "$CLIENT_ID" \
+            --client-secret "$CLIENT_SECRET" \
+            --refresh-token "$REFRESH_TOKEN" \
+            --auto-publish
