@@ -20,7 +20,6 @@ import {
   findOrCreateJournalFolder,
   formatCharacterJournalMarkdown,
   syncCharacterJournalEntry,
-  markdownToLexical,
 } from "../src/utils/sync-helpers";
 
 (() => {
@@ -1017,23 +1016,17 @@ import {
         try {
           showToast("📖 Syncing full Character Sheet journal...", "info");
           const folderId = await findOrCreateJournalFolder(
-            stored.archivistApiKey,
+            client,
             targetCampaignId,
             "Character Sheets"
           );
           const journalMarkdown = formatCharacterJournalMarkdown(char);
-          const characterEntityId = matchedEntity?.entity?.id;
-          const contentRich = markdownToLexical(journalMarkdown, {
-            characterId: characterEntityId,
-            characterName: char.name,
-          });
           const journalResult = await syncCharacterJournalEntry(
-            stored.archivistApiKey,
+            client,
             targetCampaignId,
             folderId,
             char.name,
-            journalMarkdown,
-            contentRich
+            journalMarkdown
           );
           console.log(`[Archives Beyond] Character Sheet journal ${journalResult.action}:`, journalResult.id);
           showToast(

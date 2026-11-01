@@ -1,3 +1,4 @@
+import { ArchivistClient } from "@astermoe/archivist-sdk";
 import { type CharacterData, type MonsterData, type ItemData, characterToMarkdown } from '@astermoe/dndbeyond-parser';
 
 export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
@@ -62,24 +63,59 @@ export function formatAbilityScoresLine(abilities: {
   ].join(' | ');
 }
 
+/**
+ * Formats tabular data into standard Markdown pipe table syntax.
+ */
+export function formatMarkdownTable(columns: string[], rows: (string | number)[][]): string {
+  const colLine = `| ${columns.join(' | ')} |`;
+  const alignLine = `| ${columns.map(() => ':---:').join(' | ')} |`;
+  const rowLines = rows.map((row) => `| ${row.join(' | ')} |`);
+  return `${colLine}\n${alignLine}\n${rowLines.join('\n')}`;
+}
+
+/**
+ * Formats character or monster ability scores into a Markdown table.
+ */
+export function formatAbilityScoresTable(abilities: {
+  strength: { score: number; modifier: string };
+  dexterity: { score: number; modifier: string };
+  constitution: { score: number; modifier: string };
+  intelligence: { score: number; modifier: string };
+  wisdom: { score: number; modifier: string };
+  charisma: { score: number; modifier: string };
+}): string {
+  const columns = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+  const row = [
+    `${abilities.strength.score} (${abilities.strength.modifier})`,
+    `${abilities.dexterity.score} (${abilities.dexterity.modifier})`,
+    `${abilities.constitution.score} (${abilities.constitution.modifier})`,
+    `${abilities.intelligence.score} (${abilities.intelligence.modifier})`,
+    `${abilities.wisdom.score} (${abilities.wisdom.modifier})`,
+    `${abilities.charisma.score} (${abilities.charisma.modifier})`,
+  ];
+  return formatMarkdownTable(columns, [row]);
+}
+
 export function formatCharacterStatBlock(char: CharacterData, ddbUrl: string): string {
-  const abilitySummary = formatAbilityScoresLine(char.abilities);
+  const abilityTable = formatAbilityScoresTable(char.abilities);
 
   return `### Stat Block
 
 **Level ${char.totalLevel} ${char.species} ${char.classLine}**
 
 - **AC:** ${char.ac.value} | **HP:** ${char.hp.value}/${char.hp.max} | **Speed:** ${char.speed}
-- **Ability Scores:** ${abilitySummary}
 - **Senses:** ${char.senses.join(', ')}
 - **Languages:** ${char.languages.join(', ')}
+
+#### Ability Scores
+${abilityTable}
 
 ---
 [View on D&D Beyond](${ddbUrl})`;
 }
 
 export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): string {
-  const abilitySummary = formatAbilityScoresLine(monster.abilities);
+  const abilityTable = formatAbilityScoresTable(monster.abilities);
 
   const sections: string[] = [];
 
@@ -107,9 +143,11 @@ export function formatMonsterStatBlock(monster: MonsterData, ddbUrl: string): st
 
 - **CR:** ${monster.cr} (${monster.xp} XP)
 - **AC:** ${monster.ac.value}${monster.ac.formula ? ` (${monster.ac.formula})` : ''} | **HP:** ${monster.hp.value}${monster.hp.formula ? ` (${monster.hp.formula})` : ''} | **Speed:** ${monster.speed}
-- **Ability Scores:** ${abilitySummary}
 - **Senses:** ${monster.senses.join(', ')}
-- **Languages:** ${monster.languages.join(', ')}${extraSections}
+- **Languages:** ${monster.languages.join(', ')}
+
+#### Ability Scores
+${abilityTable}${extraSections}
 
 ---
 [View on D&D Beyond](${ddbUrl})`;
@@ -260,111 +298,29 @@ export function convertMarkdownTablesToArchivist(text: string): string {
 export function formatCharacterJournalMarkdown(char: CharacterData): string {
   const rawMd = characterToMarkdown(char);
   const bodyMd = rawMd.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, '').trim();
-  const archivistMd = convertMarkdownTablesToArchivist(bodyMd);
-  return `[\[${char.name}\]\]\n\n${archivistMd}`.trim() + '\n';
+  return `[[${char.name}]]\n\n${bodyMd}`.trim() + '\n';
 }
 
 /**
  * Finds or creates a Journal Folder in Archivist by name.
  */
 export async function findOrCreateJournalFolder(
-  apiKey: string,
+  clientOrApiKey: ArchivistClient | string,
   campaignId: string,
-  folderName: string,
+  folderName: string = 'Character Sheets',
   baseUrl = 'https://api.myarchivist.ai'
 ): Promise<string | null> {
-  const cleanBase = baseUrl.replace(/\/+$/, '');
-  const headers = {
-    'x-api-key': apiKey,
-    Accept: 'application/json',
-  };
+  const client = typeof clientOrApiKey === 'string'
+    ? new ArchivistClient({ apiKey: clientOrApiKey, baseUrl })
+    : clientOrApiKey;
 
-  // 1. Check existing folders
   try {
-    const listRes = await fetch(`${cleanBase}/v1/journal-folders?campaign_id=${encodeURIComponent(campaignId)}`, {
-      method: 'GET',
-      headers,
-    });
-
-    if (listRes.ok) {
-      const data = await listRes.json();
-      const folders: any[] = Array.isArray(data) ? data : data?.data || data?.folders || [];
-      const match = folders.find(
-        (f) =>
-          f.name?.trim().toLowerCase() === folderName.trim().toLowerCase() ||
-          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase() ||
-          f.path?.trim().toLowerCase() === folderName.trim().toLowerCase()
-      );
-      if (match?.id) {
-        return match.id;
-      }
-    } else {
-      console.warn('[Archives Beyond] Could not list journal folders, status:', listRes.status);
-    }
+    const folder = await client.journalFolders.ensure(campaignId, folderName);
+    return folder.id;
   } catch (err) {
-    console.warn('[Archives Beyond] Error listing journal folders:', err);
+    console.warn('[Archives Beyond] Error ensuring journal folder:', err);
+    return null;
   }
-
-  // 2. Not found: create the folder
-  try {
-    const createRes = await fetch(`${cleanBase}/v1/journal-folders`, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        worldId: campaignId,
-        campaign_id: campaignId,
-        name: folderName,
-        path: `/${folderName}`,
-        parentId: null,
-      }),
-    });
-
-    if (createRes.ok) {
-      const created = await createRes.json();
-      const folderId =
-        created?.id ||
-        created?.data?.id ||
-        created?.folder?.id ||
-        created?.entry?.id ||
-        null;
-      if (folderId) {
-        return folderId;
-      }
-    } else {
-      const errText = await createRes.text().catch(() => '');
-      console.warn(`[Archives Beyond] Failed to create journal folder (${createRes.status}):`, errText);
-    }
-  } catch (err) {
-    console.warn('[Archives Beyond] Error creating journal folder:', err);
-  }
-
-  // 3. Fallback: re-fetch folders in case creation succeeded or folder existed with alternate path
-  try {
-    const listRes2 = await fetch(`${cleanBase}/v1/journal-folders?campaign_id=${encodeURIComponent(campaignId)}`, {
-      method: 'GET',
-      headers,
-    });
-    if (listRes2.ok) {
-      const data2 = await listRes2.json();
-      const folders2: any[] = Array.isArray(data2) ? data2 : data2?.data || data2?.folders || [];
-      const match2 = folders2.find(
-        (f) =>
-          f.name?.trim().toLowerCase() === folderName.trim().toLowerCase() ||
-          f.path?.trim().toLowerCase() === `/${folderName}`.trim().toLowerCase() ||
-          f.path?.trim().toLowerCase() === folderName.trim().toLowerCase()
-      );
-      if (match2?.id) {
-        return match2.id;
-      }
-    }
-  } catch (err) {
-    console.warn('[Archives Beyond] Fallback folder listing failed:', err);
-  }
-
-  return null;
 }
 
 /**
@@ -836,101 +792,48 @@ export function markdownToLexical(
  * so the web app's Lexical editor renders rich text while markdown export remains supported.
  */
 export async function syncCharacterJournalEntry(
-  apiKey: string,
+  clientOrApiKey: ArchivistClient | string,
   campaignId: string,
   folderId: string | null,
   characterName: string,
   content: string,
-  contentRich?: any,
+  _contentRich?: any,
   baseUrl = 'https://api.myarchivist.ai'
 ): Promise<{ id: string; action: 'created' | 'updated' }> {
-  const cleanBase = baseUrl.replace(/\/+$/, '');
-  const headers = {
-    'x-api-key': apiKey,
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-  };
+  const client = typeof clientOrApiKey === 'string'
+    ? new ArchivistClient({ apiKey: clientOrApiKey, baseUrl })
+    : clientOrApiKey;
 
   let existingId: string | null = null;
   try {
-    const listRes = await fetch(
-      `${cleanBase}/v1/journals?campaign_id=${encodeURIComponent(campaignId)}&size=100&with_links=true&format=markdown`,
-      {
-        method: 'GET',
-        headers: {
-          'x-api-key': apiKey,
-          Accept: 'application/json',
-        },
-      }
+    const { data: entries } = await client.journals.list({
+      campaign_id: campaignId,
+      size: 100,
+      format: 'markdown',
+      with_links: true,
+    });
+    const match = entries.find(
+      (e) => e.title?.trim().toLowerCase() === characterName.trim().toLowerCase()
     );
-
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      const entries: any[] = Array.isArray(listData) ? listData : listData?.data || [];
-      const match = entries.find(
-        (e) => e.title?.trim().toLowerCase() === characterName.trim().toLowerCase()
-      );
-      if (match?.id) {
-        existingId = match.id;
-      }
+    if (match?.id) {
+      existingId = match.id;
     }
   } catch (err) {
     console.warn('[Archives Beyond] Error searching journals:', err);
   }
 
   if (existingId) {
-    const putPayload: any = {
-      id: existingId,
+    const updated = await client.journals.updateMarkdown(existingId, content, {
       title: characterName,
-      content,
+      folderId: folderId || undefined,
       status: 'published',
-    };
-    if (folderId) {
-      putPayload.folderId = folderId;
-    }
-    if (contentRich) {
-      putPayload.contentRich = contentRich;
-    }
-
-    const updateRes = await fetch(`${cleanBase}/v1/journals`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(putPayload),
     });
-
-    if (!updateRes.ok) {
-      const errText = await updateRes.text().catch(() => '');
-      throw new Error(`Failed to update journal entry (${updateRes.status}): ${errText}`);
-    }
-
-    return { id: existingId, action: 'updated' };
+    return { id: updated.id, action: 'updated' };
   } else {
-    const postPayload: any = {
-      worldId: campaignId,
-      title: characterName,
-      content,
+    const created = await client.journals.createMarkdown(campaignId, characterName, content, {
+      folderId: folderId || undefined,
       status: 'published',
-    };
-    if (folderId) {
-      postPayload.folderId = folderId;
-    }
-    if (contentRich) {
-      postPayload.contentRich = contentRich;
-    }
-
-    const createRes = await fetch(`${cleanBase}/v1/journals`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(postPayload),
     });
-
-    if (!createRes.ok) {
-      const errText = await createRes.text().catch(() => '');
-      throw new Error(`Failed to create journal entry (${createRes.status}): ${errText}`);
-    }
-
-    const created = await createRes.json();
-    const newId = created.id || created.data?.id || '';
-    return { id: newId, action: 'created' };
+    return { id: created.id, action: 'created' };
   }
 }
