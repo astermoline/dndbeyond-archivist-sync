@@ -13,7 +13,6 @@ import {
   ItemData,
 } from '@astermoe/dndbeyond-parser';
 import {
-  isEligibleMagicItem,
   formatCharacterStatBlock,
   formatMonsterStatBlock,
   formatItemDetails,
@@ -23,6 +22,8 @@ import {
   findOrCreateJournalFolder,
   formatCharacterJournalMarkdown,
   syncCharacterJournalEntry,
+  listAllCampaignItems,
+  syncCharacterMagicItems,
 } from '../src/utils/sync-helpers';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -466,6 +467,24 @@ document.addEventListener('DOMContentLoaded', async () => {
           showStatus(syncResult, `Imported "${detectedChar.name}" into Archivist!`, 'success');
         }
 
+        let campaignItems: Item[] = [];
+        try {
+          campaignItems = await listAllCampaignItems(client, selectedCampaignId);
+        } catch (itemsErr) {
+          console.warn('[Archives Beyond Popup] Failed to list campaign items:', itemsErr);
+        }
+
+        // Optional: Import equipped magic items (Uncommon or higher only) first so newly created items get linked in the journal
+        if (syncInventoryItems.checked && detectedChar.inventory.length > 0) {
+          campaignItems = await syncCharacterMagicItems(
+            client,
+            selectedCampaignId,
+            detectedChar,
+            activeTabUrl,
+            campaignItems
+          );
+        }
+
         // Full Markdown Character Sheet Journal Sync:
         try {
           if (selectedCampaignId) {
@@ -474,7 +493,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               selectedCampaignId,
               'Character Sheets'
             );
-            const journalMarkdown = formatCharacterJournalMarkdown(detectedChar);
+            const journalMarkdown = formatCharacterJournalMarkdown(detectedChar, campaignItems);
             await syncCharacterJournalEntry(
               client,
               selectedCampaignId,
@@ -486,52 +505,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         } catch (journalErr) {
           console.error('[Archives Beyond Popup] Failed to sync journal entry:', journalErr);
-        }
-
-        // Optional: Import equipped magic items (Uncommon or higher only)
-        if (syncInventoryItems.checked && detectedChar.inventory.length > 0) {
-          const magicItems = detectedChar.inventory.filter((item) => isEligibleMagicItem(item.rarity));
-
-          if (magicItems.length > 0) {
-            const { data: campaignItems } = (await client.items.list({
-              campaign_id: selectedCampaignId,
-              size: 100,
-            })) as { data: Item[] };
-
-            for (const item of magicItems) {
-              try {
-                const itemSection = formatItemDetails(item, activeTabUrl);
-                const existingCompItem = campaignItems.find(
-                  (i) => i.name.toLowerCase() === item.name.toLowerCase()
-                );
-
-                if (existingCompItem) {
-                  const mergedDesc = mergeStatBlockIntoDescription(
-                    existingCompItem.description || '',
-                    itemSection,
-                    '### Item Details'
-                  );
-                  const compItemPayload: any = {
-                    description: mergedDesc,
-                  };
-                  if ((!existingCompItem.image || isLowResThumbnail(existingCompItem.image)) && item.image) {
-                    compItemPayload.image = item.image;
-                  }
-                  await client.items.update(existingCompItem.id, compItemPayload);
-                } else {
-                  await client.items.create({
-                    campaign_id: selectedCampaignId,
-                    name: item.name,
-                    type: item.type,
-                    description: itemSection,
-                    image: item.image,
-                  });
-                }
-              } catch {
-                // Ignore individual item sync errors
-              }
-            }
-          }
         }
       } else if (detectedType === 'monster' && detectedMonster) {
         const monsterStatBlock = formatMonsterStatBlock(detectedMonster, activeTabUrl);

@@ -20,6 +20,8 @@ import {
   findOrCreateJournalFolder,
   formatCharacterJournalMarkdown,
   syncCharacterJournalEntry,
+  listAllCampaignItems,
+  syncCharacterMagicItems,
 } from "../src/utils/sync-helpers";
 
 (() => {
@@ -824,16 +826,15 @@ import {
               ${optionsHtml}
             </select>
           </div>
-          ${
-            isChar
-              ? `
+          ${isChar
+          ? `
             <label class="ab-modal-checkbox-label">
               <input type="checkbox" id="ab-modal-sync-items" checked />
               <span>Import equipped magic items to compendium</span>
             </label>
           `
-              : ""
-          }
+          : ""
+        }
         </div>
         <div class="ab-modal-footer">
           <button type="button" class="ab-modal-btn ab-modal-cancel-btn" id="ab-modal-cancel">Cancel</button>
@@ -1004,11 +1005,29 @@ import {
           const created = await client.characters.create({
             campaign_id: targetCampaignId,
             character_name: char.name,
-            character_role: "pc",
+            type: "PC",
             description: statBlock,
             image: char.avatarUrl,
           });
           matchedEntity = { campaign: targetCampaign, entity: created };
+        }
+
+        let campaignItems: Item[] = [];
+        try {
+          campaignItems = await listAllCampaignItems(client, targetCampaignId);
+        } catch (itemsErr) {
+          console.warn("[Archives Beyond] Failed to list campaign items:", itemsErr);
+        }
+
+        // Optional: Import equipped magic items first so newly created items get linked in the journal
+        if (shouldImportEquippedItems && char.inventory?.length) {
+          campaignItems = await syncCharacterMagicItems(
+            client,
+            targetCampaignId,
+            char,
+            url,
+            campaignItems
+          );
         }
 
         // Full Markdown Character Sheet Journal Sync:
@@ -1020,7 +1039,7 @@ import {
             targetCampaignId,
             "Character Sheets"
           );
-          const journalMarkdown = formatCharacterJournalMarkdown(char);
+          const journalMarkdown = formatCharacterJournalMarkdown(char, campaignItems);
           const journalResult = await syncCharacterJournalEntry(
             client,
             targetCampaignId,
@@ -1035,38 +1054,7 @@ import {
           );
         } catch (journalErr) {
           console.error("[Archives Beyond] Failed to sync journal entry:", journalErr);
-          showToast(`✅ Synced "${char.name}" to ${targetCampaign.title}! (Journal sync had an issue)`, "warning");
-        }
-
-        // Optional: Import equipped magic items
-        if (shouldImportEquippedItems && char.inventory?.length) {
-          try {
-            const { data: existingItems } = (await client.items.list({
-              campaign_id: targetCampaignId,
-              size: 100,
-            })) as { data: Item[] };
-
-            for (const invItem of char.inventory) {
-              if (invItem.isAttuned || invItem.definition?.rarity) {
-                const iName = invItem.definition?.name || invItem.name;
-                const iRarity = invItem.definition?.rarity;
-                if (!iName || !iRarity) continue;
-
-                const already = existingItems.find((i) => i.name.toLowerCase() === iName.toLowerCase());
-                if (!already) {
-                  await client.items.create({
-                    campaign_id: targetCampaignId,
-                    name: iName,
-                    type: invItem.definition?.filterType || "Wondrous Item",
-                    description: invItem.definition?.description || "",
-                    image: invItem.definition?.avatarUrl,
-                  });
-                }
-              }
-            }
-          } catch (e) {
-            console.warn("Item import warning:", e);
-          }
+          showToast(`✅ Synced "${char.name}" to ${targetCampaign.title}! (Journal sync had an issue)`, "info");
         }
 
         updateButtonsUi(char.name, true, "Character");
@@ -1123,7 +1111,7 @@ import {
           const created = await client.characters.create({
             campaign_id: targetCampaignId,
             character_name: monster.name,
-            character_role: "npc",
+            type: "NPC",
             description: statBlock,
             image: monster.imageUrl,
           });
@@ -1303,7 +1291,7 @@ import {
       }
 
       setReactInputValue(textarea, userNotes);
-      await navigator.clipboard.writeText(userNotes).catch(() => {});
+      await navigator.clipboard.writeText(userNotes).catch(() => { });
       showToast(`✨ Backstory updated from "${matchedEntity.campaign.title}"!`, "success");
     } catch (err: any) {
       showToast(`❌ Error: ${err.message}`, "error");
@@ -1314,7 +1302,7 @@ import {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === "UPDATE_BACKSTORY") {
       const backstory = message.backstory;
-      navigator.clipboard.writeText(backstory).catch(() => {});
+      navigator.clipboard.writeText(backstory).catch(() => { });
 
       let textarea = (document.querySelector("textarea.ct-note-pane__textarea") ||
         document.querySelector("textarea[name=\"backstory\"]") ||

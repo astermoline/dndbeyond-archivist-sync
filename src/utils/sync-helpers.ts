@@ -1,4 +1,4 @@
-import { ArchivistClient } from "@astermoe/archivist-sdk";
+import { ArchivistClient, type Item } from "@astermoe/archivist-sdk";
 import { type CharacterData, type MonsterData, type ItemData, characterToMarkdown } from '@astermoe/dndbeyond-parser';
 
 export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
@@ -9,7 +9,11 @@ export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
   'artifact',
 ];
 
-export function isEligibleMagicItem(rarity?: string | null): boolean {
+export function isEligibleMagicItem(
+  rarityOrItem?: string | { rarity?: string | null } | null
+): boolean {
+  if (!rarityOrItem) return false;
+  const rarity = typeof rarityOrItem === 'string' ? rarityOrItem : rarityOrItem.rarity;
   if (!rarity) return false;
   const r = rarity.toLowerCase().trim();
   return ELIGIBLE_MAGIC_ITEM_RARITIES.includes(r);
@@ -290,13 +294,238 @@ export function convertMarkdownTablesToArchivist(text: string): string {
   });
 }
 
+export interface CompendiumItemRef {
+  id?: string;
+  name: string;
+  aliases?: string[];
+}
+
+export interface FormatCharacterJournalOptions {
+  compendiumItems?: CompendiumItemRef[];
+}
+
+/**
+ * Wraps an item or spell name in [[wikilink]] syntax if a matching Item record exists
+ * in the campaign compendium (matched case-insensitively against item name or aliases).
+ */
+export function formatCompendiumWikilink(
+  name: string,
+  compendiumItems?: CompendiumItemRef[]
+): string {
+  if (!name) return name;
+  const trimmed = name.trim();
+  if (!trimmed || /^\[\[.+\]\]$/.test(trimmed)) {
+    return name;
+  }
+  if (!compendiumItems || compendiumItems.length === 0) {
+    return name;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const nameMatch = compendiumItems.find(
+    (item) => item.name?.trim().toLowerCase() === lower
+  );
+  if (nameMatch) {
+    return `[[${nameMatch.name.trim()}]]`;
+  }
+
+  for (const item of compendiumItems) {
+    const matchedAlias = item.aliases?.find(
+      (alias) => alias?.trim().toLowerCase() === lower
+    );
+    if (matchedAlias) {
+      return `[[${matchedAlias.trim()}]]`;
+    }
+  }
+
+  return name;
+}
+
+/**
+ * Fetches all compendium Item records in an Archivist campaign across pages.
+ */
+export async function listAllCampaignItems(
+  client: ArchivistClient,
+  campaignId: string
+): Promise<Item[]> {
+  const allItems: Item[] = [];
+  let page = 1;
+  const size = 100;
+  const maxPages = 20;
+
+  while (page <= maxPages) {
+    const res = await client.items.list({
+      campaign_id: campaignId,
+      page,
+      size,
+      with_links: true,
+    });
+    const batch = Array.isArray(res) ? res : res?.data || [];
+    allItems.push(...batch);
+
+    const totalPages = !Array.isArray(res) && typeof res?.pages === 'number' ? res.pages : 1;
+    if (page >= totalPages || batch.length === 0) {
+      break;
+    }
+    page++;
+  }
+
+  return allItems;
+}
+
+/**
+ * Imports or updates eligible magic items (Uncommon or higher) from a character's inventory
+ * into the campaign compendium, returning the updated list of campaign items (including newly created ones).
+ */
+export async function syncCharacterMagicItems(
+  client: ArchivistClient,
+  campaignId: string,
+  char: CharacterData,
+  ddbUrl: string,
+  existingCampaignItems?: Item[]
+): Promise<Item[]> {
+  const campaignItems = existingCampaignItems
+    ? [...existingCampaignItems]
+    : await listAllCampaignItems(client, campaignId);
+
+  if (!char.inventory || char.inventory.length === 0) {
+    return campaignItems;
+  }
+
+  const magicItems = char.inventory.filter((item) => isEligibleMagicItem(item.rarity));
+  if (magicItems.length === 0) {
+    return campaignItems;
+  }
+
+  for (const item of magicItems) {
+    try {
+      const itemSection = formatItemDetails(item, ddbUrl);
+      const itemNameLower = item.name.trim().toLowerCase();
+      const existingCompItem = campaignItems.find(
+        (i) =>
+          i.name?.trim().toLowerCase() === itemNameLower ||
+          i.aliases?.some((a) => a?.trim().toLowerCase() === itemNameLower)
+      );
+
+      if (existingCompItem) {
+        const mergedDesc = mergeStatBlockIntoDescription(
+          existingCompItem.description || '',
+          itemSection,
+          '### Item Details'
+        );
+        const compItemPayload: any = {
+          description: mergedDesc,
+        };
+        if ((!existingCompItem.image || isLowResThumbnail(existingCompItem.image)) && item.image) {
+          compItemPayload.image = item.image;
+        }
+        const updated = await client.items.update(existingCompItem.id, compItemPayload);
+        if (updated) {
+          const idx = campaignItems.findIndex((i) => i.id === existingCompItem.id);
+          if (idx !== -1) {
+            campaignItems[idx] = updated;
+          }
+        }
+      } else {
+        const created = await client.items.create({
+          campaign_id: campaignId,
+          name: item.name,
+          type: item.type,
+          description: itemSection,
+          image: item.image,
+        });
+        if (created) {
+          campaignItems.push(created);
+        } else {
+          campaignItems.push({
+            id: '',
+            campaign_id: campaignId,
+            name: item.name,
+            aliases: [],
+            merge: false,
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(`[Archives Beyond] Failed to sync magic item "${item.name}":`, err);
+    }
+  }
+
+  return campaignItems;
+}
+
 /**
  * Formats a full character sheet for an Archivist journal entry.
  * Strips Obsidian-specific YAML frontmatter, prefixes with a [[Character Name]] wikilink,
- * and converts pipe tables into Archivist's [TABLE] syntax.
+ * and wraps inventory item and spell names in [[wikilink]] syntax when a matching Item record
+ * exists in the campaign compendium.
  */
-export function formatCharacterJournalMarkdown(char: CharacterData): string {
-  const rawMd = characterToMarkdown(char);
+export function formatCharacterJournalMarkdown(
+  char: CharacterData,
+  itemsOrOptions?: CompendiumItemRef[] | FormatCharacterJournalOptions
+): string {
+  const compendiumItems = Array.isArray(itemsOrOptions)
+    ? itemsOrOptions
+    : itemsOrOptions?.compendiumItems;
+
+  let targetChar = char;
+
+  if (compendiumItems && compendiumItems.length > 0) {
+    const lookup = new Map<string, string>();
+    for (const item of compendiumItems) {
+      if (item.aliases) {
+        for (const alias of item.aliases) {
+          const trimmedAlias = alias?.trim();
+          if (trimmedAlias && !lookup.has(trimmedAlias.toLowerCase())) {
+            lookup.set(trimmedAlias.toLowerCase(), trimmedAlias);
+          }
+        }
+      }
+    }
+    for (const item of compendiumItems) {
+      const trimmedName = item.name?.trim();
+      if (trimmedName) {
+        lookup.set(trimmedName.toLowerCase(), trimmedName);
+      }
+    }
+
+    const wrapIfMatched = (rawName: string): string => {
+      if (!rawName) return rawName;
+      const trimmed = rawName.trim();
+      if (!trimmed || /^\[\[.+\]\]$/.test(trimmed)) return rawName;
+      const canonical = lookup.get(trimmed.toLowerCase());
+      return canonical ? `[[${canonical}]]` : rawName;
+    };
+
+    const linkedInventory = char.inventory.map((invItem) => ({
+      ...invItem,
+      name: wrapIfMatched(invItem.name),
+    }));
+
+    let linkedSpellcasting = char.spellcasting;
+    if (char.spellcasting) {
+      const linkedGroups: Record<number, typeof char.spellcasting.groups[number]> = {};
+      for (const [lvlKey, spells] of Object.entries(char.spellcasting.groups)) {
+        linkedGroups[Number(lvlKey)] = spells.map((spell) => ({
+          ...spell,
+          name: wrapIfMatched(spell.name),
+        }));
+      }
+      linkedSpellcasting = {
+        ...char.spellcasting,
+        groups: linkedGroups,
+      };
+    }
+
+    targetChar = {
+      ...char,
+      inventory: linkedInventory,
+      spellcasting: linkedSpellcasting,
+    };
+  }
+
+  const rawMd = characterToMarkdown(targetChar);
   const bodyMd = rawMd.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, '').trim();
   return `[[${char.name}]]\n\n${bodyMd}`.trim() + '\n';
 }
@@ -483,16 +712,16 @@ export function parseInlineMarkdown(
   return nodes.length > 0
     ? nodes
     : [
-        {
-          mode: 'normal',
-          text: '',
-          type: 'text',
-          style: '',
-          detail: 0,
-          format: 0,
-          version: 1,
-        },
-      ];
+      {
+        mode: 'normal',
+        text: '',
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 0,
+        version: 1,
+      },
+    ];
 }
 
 export function createLexicalParagraph(children: LexicalInlineNode[]) {
