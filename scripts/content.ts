@@ -826,15 +826,16 @@ import {
               ${optionsHtml}
             </select>
           </div>
-          ${isChar
-          ? `
+          ${
+            isChar
+              ? `
             <label class="ab-modal-checkbox-label">
               <input type="checkbox" id="ab-modal-sync-items" checked />
               <span>Import equipped magic items to compendium</span>
             </label>
           `
-          : ""
-        }
+              : ""
+          }
         </div>
         <div class="ab-modal-footer">
           <button type="button" class="ab-modal-btn ab-modal-cancel-btn" id="ab-modal-cancel">Cancel</button>
@@ -1291,7 +1292,7 @@ import {
       }
 
       setReactInputValue(textarea, userNotes);
-      await navigator.clipboard.writeText(userNotes).catch(() => { });
+      await navigator.clipboard.writeText(userNotes).catch(() => {});
       showToast(`✨ Backstory updated from "${matchedEntity.campaign.title}"!`, "success");
     } catch (err: any) {
       showToast(`❌ Error: ${err.message}`, "error");
@@ -1302,7 +1303,7 @@ import {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === "UPDATE_BACKSTORY") {
       const backstory = message.backstory;
-      navigator.clipboard.writeText(backstory).catch(() => { });
+      navigator.clipboard.writeText(backstory).catch(() => {});
 
       let textarea = (document.querySelector("textarea.ct-note-pane__textarea") ||
         document.querySelector("textarea[name=\"backstory\"]") ||

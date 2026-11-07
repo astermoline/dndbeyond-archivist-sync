@@ -712,16 +712,16 @@ export function parseInlineMarkdown(
   return nodes.length > 0
     ? nodes
     : [
-      {
-        mode: 'normal',
-        text: '',
-        type: 'text',
-        style: '',
-        detail: 0,
-        format: 0,
-        version: 1,
-      },
-    ];
+        {
+          mode: 'normal',
+          text: '',
+          type: 'text',
+          style: '',
+          detail: 0,
+          format: 0,
+          version: 1,
+        },
+      ];
 }
 
 export function createLexicalParagraph(children: LexicalInlineNode[]) {
