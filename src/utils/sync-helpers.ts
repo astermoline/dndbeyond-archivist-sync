@@ -18,10 +18,37 @@ export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
   'artifact',
 ];
 
+export interface CompendiumEligibleItemLike {
+  rarity?: string | null;
+  isHomebrew?: boolean;
+  isCustomized?: boolean;
+  isCustomItem?: boolean;
+  originalName?: string;
+}
+
+export type CustomizableInventoryItemData = InventoryItemData & CompendiumEligibleItemLike;
+
+/**
+ * Determines whether an item should be imported into the Archivist campaign compendium.
+ * Eligible when any of the following hold:
+ * 1. The item is homebrew (`isHomebrew: true`)
+ * 2. The item has sheet customizations overriding its name or base traits (`isCustomized` / `isCustomItem` / `originalName`)
+ * 3. The item's rarity is Uncommon or rarer
+ */
 export function isEligibleMagicItem(
-  rarityOrItem?: string | { rarity?: string | null } | null
+  rarityOrItem?: string | CompendiumEligibleItemLike | null
 ): boolean {
   if (!rarityOrItem) return false;
+  if (typeof rarityOrItem !== 'string') {
+    if (
+      rarityOrItem.isHomebrew ||
+      rarityOrItem.isCustomized ||
+      rarityOrItem.isCustomItem ||
+      Boolean(rarityOrItem.originalName)
+    ) {
+      return true;
+    }
+  }
   const rarity = typeof rarityOrItem === 'string' ? rarityOrItem : rarityOrItem.rarity;
   if (!rarity) return false;
   const r = rarity.toLowerCase().trim();
@@ -166,16 +193,53 @@ ${abilityTable}${extraSections}
 [View on D&D Beyond](${ddbUrl})`;
 }
 
-export function formatItemDetails(item: ItemData, ddbUrl: string): string {
+export function formatItemDetails(
+  item: ItemData & CompendiumEligibleItemLike,
+  ddbUrl: string
+): string {
+  const baseRef =
+    item.originalName && item.originalName !== item.name
+      ? ` *(Customized ${item.originalName})*`
+      : '';
   const attunement = item.requiresAttunement
     ? `\n*Requires Attunement${item.attunementDescription ? ` (${item.attunementDescription})` : ''}*`
     : '';
 
+  const statParts: string[] = [];
+  if (
+    item.weight !== undefined &&
+    item.weight !== null &&
+    (item.weight > 0 || item.isCustomized || item.isCustomItem)
+  ) {
+    statParts.push(`**Weight:** ${item.weight} lbs`);
+  }
+  if (item.cost) {
+    statParts.push(`**Cost:** ${item.cost}`);
+  }
+
+  const metaLines: string[] = [];
+  if (statParts.length > 0) {
+    metaLines.push(`- ${statParts.join(' | ')}`);
+  }
+  if (item.notes && item.notes.length > 0) {
+    for (const note of item.notes) {
+      const trimmedNote = note.trim();
+      if (!trimmedNote) continue;
+      const kvMatch = /^([A-Za-z0-9 /-]+):\s*(.+)$/.exec(trimmedNote);
+      if (kvMatch) {
+        metaLines.push(`- **${kvMatch[1]}:** ${kvMatch[2]}`);
+      } else {
+        metaLines.push(`- **Notes:** ${trimmedNote}`);
+      }
+    }
+  }
+
+  const metaBlock = metaLines.length > 0 ? `\n\n${metaLines.join('\n')}` : '';
+  const descBlock = item.description ? `\n\n${item.description}` : '';
+
   return `### Item Details
 
-**${item.rarity ? `${item.rarity} ` : ''}${item.type}**${attunement}
-
-${item.description}
+**${item.rarity ? `${item.rarity} ` : ''}${item.type}**${baseRef}${attunement}${metaBlock}${descBlock}
 
 ---
 [View on D&D Beyond](${ddbUrl})`;
@@ -353,59 +417,110 @@ export function applyCharacterCustomizations(
     }
   }
 
-  const updatedInventory: InventoryItemData[] = (char.inventory || []).map((invItem) => {
+  const rawCustomItemIds = new Set<string>();
+  if (Array.isArray(d.customItems)) {
+    for (const ci of d.customItems) {
+      if (ci?.id !== undefined && ci?.id !== null) {
+        rawCustomItemIds.add(String(ci.id));
+      }
+    }
+  }
+
+  const updatedInventory: CustomizableInventoryItemData[] = (
+    (char.inventory || []) as CustomizableInventoryItemData[]
+  ).map((invItem) => {
     const rawItem =
       invItem.id !== undefined && invItem.id !== null
         ? rawInventoryById.get(String(invItem.id))
         : undefined;
     if (!rawItem) {
+      if (
+        invItem.id !== undefined &&
+        invItem.id !== null &&
+        rawCustomItemIds.has(String(invItem.id))
+      ) {
+        return {
+          ...invItem,
+          isCustomItem: true,
+          isCustomized: true,
+        };
+      }
       return invItem;
     }
 
     const itemId = rawItem.id;
     const entityTypeId = rawItem.entityTypeId;
+    const def = rawItem.definition || {};
+    const baseName = def.name || invItem.originalName || invItem.name;
+
+    const isHomebrew = Boolean(invItem.isHomebrew || rawItem.isHomebrew || def.isHomebrew);
+    const isCustomItem = Boolean(invItem.isCustomItem || rawItem.isCustomItem || def.isCustomItem);
+    let hasCustomization = Boolean(invItem.isCustomized || isCustomItem);
 
     const rawCustomName = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 8);
     const customName =
       typeof rawCustomName === 'string' && rawCustomName.trim() ? rawCustomName.trim() : undefined;
     const name = customName || invItem.name;
+    const originalName =
+      customName && customName !== baseName ? baseName : invItem.originalName;
+    if (originalName) {
+      hasCustomization = true;
+    }
 
     const rawCustomWeight = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 22);
     const parsedCustomWeight =
       rawCustomWeight !== undefined && rawCustomWeight !== null && rawCustomWeight !== ''
         ? Number(rawCustomWeight)
         : NaN;
+    if (!Number.isNaN(parsedCustomWeight)) {
+      hasCustomization = true;
+    }
     const qty = invItem.quantity ?? 1;
     const weight = !Number.isNaN(parsedCustomWeight) ? parsedCustomWeight : invItem.weight;
-    const totalWeight =
-      !Number.isNaN(parsedCustomWeight)
-        ? parseFloat((qty * parsedCustomWeight).toFixed(1))
-        : invItem.totalWeight;
+    const totalWeight = !Number.isNaN(parsedCustomWeight)
+      ? parseFloat((qty * parsedCustomWeight).toFixed(1))
+      : invItem.totalWeight;
 
     const rawCustomCost = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 19);
     const parsedCustomCost =
       rawCustomCost !== undefined && rawCustomCost !== null && rawCustomCost !== ''
         ? Number(rawCustomCost)
         : NaN;
+    if (!Number.isNaN(parsedCustomCost)) {
+      hasCustomization = true;
+    }
     const cost = !Number.isNaN(parsedCustomCost) ? `${parsedCustomCost} gp` : invItem.cost;
 
     const notes = invItem.notes ? [...invItem.notes] : [];
-    const isSilvered = Boolean(getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 20));
+    const isSilvered = Boolean(
+      getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 20)
+    );
     const isAdamantine = Boolean(
       getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 21)
     );
-    if (isSilvered || isAdamantine) {
+    const isPactWeapon = Boolean(
+      getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 28)
+    );
+    const isHexWeapon = Boolean(
+      getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 29)
+    );
+    if (isSilvered || isAdamantine || isPactWeapon || isHexWeapon) {
+      hasCustomization = true;
       const propIdx = notes.findIndex((n) => n.startsWith('Properties: '));
       const existingProps =
         propIdx !== -1
           ? notes[propIdx]
-              .slice('Properties: '.length)
-              .split(',')
-              .map((p) => p.trim())
-              .filter(Boolean)
+            .slice('Properties: '.length)
+            .split(',')
+            .map((p) => p.trim())
+            .filter(Boolean)
           : [];
       if (isSilvered && !existingProps.includes('Silvered')) existingProps.push('Silvered');
       if (isAdamantine && !existingProps.includes('Adamantine')) existingProps.push('Adamantine');
+      if (isPactWeapon && !existingProps.includes('Pact Weapon')) {
+        existingProps.push('Pact Weapon');
+      }
+      if (isHexWeapon && !existingProps.includes('Hex Weapon')) existingProps.push('Hex Weapon');
       if (existingProps.length > 0) {
         const propLine = `Properties: ${existingProps.join(', ')}`;
         if (propIdx !== -1) {
@@ -416,10 +531,21 @@ export function applyCharacterCustomizations(
       }
     }
 
+    const rawToHitOverride = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 13);
+    if (rawToHitOverride !== undefined && rawToHitOverride !== null && rawToHitOverride !== '') {
+      const num = Number(rawToHitOverride);
+      if (!Number.isNaN(num)) {
+        hasCustomization = true;
+        const entry = `To-Hit Override: ${num >= 0 ? `+${num}` : num}`;
+        if (!notes.includes(entry)) notes.push(entry);
+      }
+    }
+
     const rawToHitBonus = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 12);
     if (rawToHitBonus !== undefined && rawToHitBonus !== null && rawToHitBonus !== '') {
       const num = Number(rawToHitBonus);
       if (!Number.isNaN(num) && num !== 0) {
+        hasCustomization = true;
         const entry = `To-Hit Bonus: ${num > 0 ? `+${num}` : num}`;
         if (!notes.includes(entry)) notes.push(entry);
       }
@@ -430,16 +556,39 @@ export function applyCharacterCustomizations(
       const num = Number(rawDamageBonus);
       let entry: string | undefined;
       if (!Number.isNaN(num) && num !== 0) {
+        hasCustomization = true;
         entry = `Damage Bonus: ${num > 0 ? `+${num}` : num}`;
       } else if (Number.isNaN(num) && String(rawDamageBonus).trim()) {
+        hasCustomization = true;
         entry = `Damage Bonus: ${String(rawDamageBonus).trim()}`;
       }
       if (entry && !notes.includes(entry)) notes.push(entry);
     }
 
+    const rawSaveDcOverride = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 15);
+    if (rawSaveDcOverride !== undefined && rawSaveDcOverride !== null && rawSaveDcOverride !== '') {
+      const num = Number(rawSaveDcOverride);
+      if (!Number.isNaN(num)) {
+        hasCustomization = true;
+        const entry = `Save DC: ${num}`;
+        if (!notes.includes(entry)) notes.push(entry);
+      }
+    }
+
+    const rawSaveDcBonus = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 14);
+    if (rawSaveDcBonus !== undefined && rawSaveDcBonus !== null && rawSaveDcBonus !== '') {
+      const num = Number(rawSaveDcBonus);
+      if (!Number.isNaN(num) && num !== 0) {
+        hasCustomization = true;
+        const entry = `Save DC Bonus: ${num > 0 ? `+${num}` : num}`;
+        if (!notes.includes(entry)) notes.push(entry);
+      }
+    }
+
     let description = invItem.description || '';
     const rawCustomNotes = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 9);
     if (typeof rawCustomNotes === 'string' && rawCustomNotes.trim()) {
+      hasCustomization = true;
       const cleanedNotes = rawCustomNotes.replace(/\r\n/g, '\n').trim();
       if (cleanedNotes.includes('\n')) {
         const prefix = `**Notes:** ${cleanedNotes}`;
@@ -455,6 +604,10 @@ export function applyCharacterCustomizations(
     return {
       ...invItem,
       name,
+      ...(originalName ? { originalName } : {}),
+      ...(isHomebrew ? { isHomebrew: true } : {}),
+      ...(isCustomItem ? { isCustomItem: true } : {}),
+      ...(hasCustomization ? { isCustomized: true } : {}),
       weight,
       totalWeight,
       cost,
@@ -509,6 +662,8 @@ export function applyCharacterCustomizations(
         id: ci.id,
         name: String(ci.name).trim(),
         type: ci.type || 'Other Gear',
+        isCustomItem: true,
+        isCustomized: true,
         requiresAttunement: false,
         weight: wt,
         cost,
@@ -844,8 +999,9 @@ export async function listAllCampaignItems(
 }
 
 /**
- * Imports or updates eligible magic items (Uncommon or higher) from a character's inventory
- * into the campaign compendium, returning the updated list of campaign items (including newly created ones).
+ * Imports or updates eligible items from a character's inventory into the campaign compendium
+ * (Uncommon+ magic items, homebrew items, and customized/custom items), returning the updated list
+ * of campaign items (including newly created ones).
  */
 export async function syncCharacterMagicItems(
   client: ArchivistClient,
@@ -862,12 +1018,14 @@ export async function syncCharacterMagicItems(
     return campaignItems;
   }
 
-  const magicItems = char.inventory.filter((item) => isEligibleMagicItem(item.rarity));
-  if (magicItems.length === 0) {
+  const eligibleItems = (char.inventory as CustomizableInventoryItemData[]).filter((item) =>
+    isEligibleMagicItem(item)
+  );
+  if (eligibleItems.length === 0) {
     return campaignItems;
   }
 
-  for (const item of magicItems) {
+  for (const item of eligibleItems) {
     try {
       const itemSection = formatItemDetails(item, ddbUrl);
       const itemNameLower = item.name.trim().toLowerCase();
@@ -886,6 +1044,9 @@ export async function syncCharacterMagicItems(
         const compItemPayload: any = {
           description: mergedDesc,
         };
+        if (item.type) {
+          compItemPayload.type = item.type;
+        }
         if ((!existingCompItem.image || isLowResThumbnail(existingCompItem.image)) && item.image) {
           compItemPayload.image = item.image;
         }
@@ -1182,16 +1343,16 @@ export function parseInlineMarkdown(
   return nodes.length > 0
     ? nodes
     : [
-        {
-          mode: 'normal',
-          text: '',
-          type: 'text',
-          style: '',
-          detail: 0,
-          format: 0,
-          version: 1,
-        },
-      ];
+      {
+        mode: 'normal',
+        text: '',
+        type: 'text',
+        style: '',
+        detail: 0,
+        format: 0,
+        version: 1,
+      },
+    ];
 }
 
 export function createLexicalParagraph(children: LexicalInlineNode[]) {

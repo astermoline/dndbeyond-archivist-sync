@@ -831,7 +831,7 @@ import {
               ? `
             <label class="ab-modal-checkbox-label">
               <input type="checkbox" id="ab-modal-sync-items" checked />
-              <span>Import equipped magic items to compendium</span>
+              <span>Import magic, homebrew &amp; custom items to compendium</span>
             </label>
           `
               : ""
@@ -1139,7 +1139,7 @@ import {
         }
 
         if (!isEligibleMagicItem(item)) {
-          showToast(`⚠️ "${item.name}" is a mundane item without rarity and was skipped.`, "info");
+          showToast(`⚠️ "${item.name}" is a non-homebrew mundane item and was skipped.`, "info");
           return;
         }
 

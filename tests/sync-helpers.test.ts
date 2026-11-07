@@ -5,6 +5,7 @@ import { type CharacterData } from '@astermoe/dndbeyond-parser';
 import {
   applyCharacterCustomizations,
   fetchCharacterWithCustomizations,
+  isEligibleMagicItem,
   formatCompendiumWikilink,
   formatCharacterJournalMarkdown,
   listAllCampaignItems,
@@ -490,6 +491,232 @@ describe('D&D Beyond character customizations', () => {
       { id: 'bag-1', name: 'Aldershine Messenger Bag', aliases: [] },
     ]);
     assert.ok(mdLinked.includes('#### [[Aldershine Messenger Bag]] (Equipped)'));
+  });
+
+  it('imports customized items (by name or traits) and homebrew Common items into compendium while skipping plain mundane items', async () => {
+    assert.equal(isEligibleMagicItem('Common'), false);
+    assert.equal(isEligibleMagicItem('Uncommon'), true);
+    assert.equal(isEligibleMagicItem({ rarity: 'Common', isHomebrew: true }), true);
+    assert.equal(isEligibleMagicItem({ rarity: undefined, isHomebrew: true }), true);
+    assert.equal(isEligibleMagicItem({ rarity: 'Common', isCustomized: true }), true);
+    assert.equal(isEligibleMagicItem({ rarity: undefined, isCustomItem: true }), true);
+    assert.equal(isEligibleMagicItem({ rarity: 'Common', isHomebrew: false, isCustomized: false }), false);
+
+    const mockRawApiPayload = {
+      success: true,
+      data: {
+        id: 170163364,
+        name: 'Stella Aldershine',
+        classes: [{ level: 3, definition: { name: 'Warlock', spellCastingAbilityId: 6 } }],
+        stats: [
+          { id: 1, value: 10 },
+          { id: 2, value: 16 },
+          { id: 3, value: 14 },
+          { id: 4, value: 10 },
+          { id: 5, value: 14 },
+          { id: 6, value: 18 },
+        ],
+        inventory: [
+          // 1. Plain official Common item -> should NOT be imported
+          {
+            id: 1117491966,
+            entityTypeId: 1439493548,
+            equipped: true,
+            quantity: 1,
+            definition: {
+              id: 100,
+              name: 'Cloak of Billowing',
+              filterType: 'Wondrous item',
+              rarity: 'Common',
+              isHomebrew: false,
+              weight: 0,
+              description: '<p>Billows dramatically.</p>',
+            },
+          },
+          // 2. Homebrew Common item -> SHOULD be imported
+          {
+            id: 1116959863,
+            entityTypeId: 1439493548,
+            equipped: true,
+            quantity: 1,
+            definition: {
+              id: 12159941,
+              name: 'Bramble-Star',
+              filterType: 'Wondrous item',
+              rarity: 'Common',
+              isHomebrew: true,
+              weight: 3,
+              description: '<p>Hand-crafted broom gifted to Stella.</p>',
+            },
+          },
+          // 3. Customized Common item (custom name + cost override) -> SHOULD be imported with customizations intact
+          {
+            id: 1116957527,
+            entityTypeId: 1439493548,
+            equipped: true,
+            quantity: 1,
+            definition: {
+              id: 422,
+              name: 'Sack',
+              filterType: 'Other Gear',
+              rarity: 'Common',
+              isHomebrew: false,
+              weight: 0.5,
+              cost: 0.01,
+              description: '<p>A Sack holds up to 30 pounds within 1 cubic foot.</p>',
+            },
+          },
+          // 4. Customized Common item (trait-only customization, same name) -> SHOULD be imported with overridden traits
+          {
+            id: 1087548407,
+            entityTypeId: 1439493548,
+            equipped: true,
+            quantity: 1,
+            definition: {
+              id: 10,
+              name: 'Dagger',
+              filterType: 'Weapon',
+              rarity: 'Common',
+              isHomebrew: false,
+              weight: 1,
+              cost: 2,
+              properties: [{ name: 'Finesse' }, { name: 'Light' }],
+              description: '<p>Simple melee weapon.</p>',
+            },
+          },
+        ],
+        characterValues: [
+          {
+            typeId: 8,
+            value: 'Aldershine Messenger Bag',
+            valueId: '1116957527',
+            valueTypeId: '1439493548',
+          },
+          {
+            typeId: 19,
+            value: 0.5,
+            valueId: '1116957527',
+            valueTypeId: '1439493548',
+          },
+          {
+            typeId: 20,
+            value: true,
+            valueId: '1087548407',
+            valueTypeId: '1439493548',
+          },
+          {
+            typeId: 12,
+            value: 1,
+            valueId: '1087548407',
+            valueTypeId: '1439493548',
+          },
+          {
+            typeId: 9,
+            value: 'Inscribed with Aldershine crest',
+            valueId: '1087548407',
+            valueTypeId: '1439493548',
+          },
+        ],
+        customItems: [
+          // 5. Custom sheet item -> SHOULD be imported
+          {
+            id: 25282084,
+            name: 'Pressed Bramble Flower',
+            description: '<p>Keepsake from Bramble Hallow Farm.</p>',
+            weight: 0,
+            cost: null,
+            quantity: 1,
+            notes: 'Tucked inside tome',
+          },
+        ],
+      },
+    };
+
+    const mockDdbFetch: typeof fetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('cobalt-token')) {
+        return { ok: false, status: 401, json: async () => ({}) } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        clone: () => ({ json: async () => mockRawApiPayload }) as Response,
+        json: async () => mockRawApiPayload,
+      } as Response;
+    };
+
+    const char = await fetchCharacterWithCustomizations(170163364, { fetchFn: mockDdbFetch });
+
+    const createdPayloads: any[] = [];
+    const dbItems: Item[] = [];
+    const mockArchivistFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = init?.method || 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+      if (method === 'POST' && urlStr.endsWith('/v1/items')) {
+        createdPayloads.push(body);
+        const created: Item = {
+          id: `item_${dbItems.length + 1}`,
+          campaign_id: body.campaign_id,
+          name: body.name,
+          aliases: [],
+          type: body.type,
+          description: body.description,
+          merge: false,
+          created_at: '2026-11-07T00:00:00Z',
+        };
+        dbItems.push(created);
+        return {
+          ok: true,
+          status: 201,
+          json: async () => created,
+        } as Response;
+      }
+
+      throw new Error(`Unexpected Archivist request: ${method} ${urlStr}`);
+    };
+
+    const client = new ArchivistClient({
+      apiKey: 'test-key',
+      fetchFn: mockArchivistFetch as typeof fetch,
+    });
+
+    const syncedItems = await syncCharacterMagicItems(
+      client,
+      'camp_1',
+      char,
+      'https://www.dndbeyond.com/characters/170163364',
+      []
+    );
+
+    const createdNames = createdPayloads.map((p) => p.name);
+    assert.deepEqual(createdNames, [
+      'Bramble-Star',
+      'Aldershine Messenger Bag',
+      'Dagger',
+      'Pressed Bramble Flower',
+    ]);
+    assert.ok(!createdNames.includes('Cloak of Billowing'));
+
+    // Verify customizations are intact on Aldershine Messenger Bag compendium description
+    const bagPayload = createdPayloads.find((p) => p.name === 'Aldershine Messenger Bag');
+    assert.ok(bagPayload.description.includes('*(Customized Sack)*'));
+    assert.ok(bagPayload.description.includes('**Weight:** 0.5 lbs | **Cost:** 0.5 gp'));
+
+    // Verify trait-only customizations are intact on Dagger compendium description
+    const daggerPayload = createdPayloads.find((p) => p.name === 'Dagger');
+    assert.ok(daggerPayload.description.includes('- **Properties:** Finesse, Light, Silvered'));
+    assert.ok(daggerPayload.description.includes('- **To-Hit Bonus:** +1'));
+    assert.ok(daggerPayload.description.includes('- **Notes:** Inscribed with Aldershine crest'));
+
+    // Verify all imported items get [[wikilink]] wrapped in character journal while plain Common item stays plain
+    const journalMd = formatCharacterJournalMarkdown(char, syncedItems);
+    assert.ok(journalMd.includes('#### [[Bramble-Star]] (Equipped)'));
+    assert.ok(journalMd.includes('#### [[Aldershine Messenger Bag]] (Equipped)'));
+    assert.ok(journalMd.includes('#### [[Dagger]] (Equipped)'));
+    assert.ok(journalMd.includes('#### [[Pressed Bramble Flower]]'));
+    assert.ok(journalMd.includes('#### Cloak of Billowing (Equipped)'));
   });
 });
 
