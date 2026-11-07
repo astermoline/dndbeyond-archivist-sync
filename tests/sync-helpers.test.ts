@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { ArchivistClient, type Item } from '@astermoe/archivist-sdk';
 import { type CharacterData } from '@astermoe/dndbeyond-parser';
 import {
+  applyCharacterCustomizations,
+  fetchCharacterWithCustomizations,
   formatCompendiumWikilink,
   formatCharacterJournalMarkdown,
   listAllCampaignItems,
@@ -282,4 +284,213 @@ describe('syncCharacterMagicItems + journal linking integration', () => {
     assert.ok(journalMd.includes('#### Dagger (Equipped)'));
   });
 });
+
+describe('D&D Beyond character customizations', () => {
+  it('applies custom item names, cost/weight overrides, notes, customItems, and spell renames idempotently', () => {
+    const baseChar = createMockStellaCharacter();
+    baseChar.inventory.push({
+      id: 1116957527,
+      name: 'Sack',
+      type: 'Other Gear',
+      requiresAttunement: false,
+      weight: 0.5,
+      cost: '0.01 gp',
+      description: 'A sack holds up to 30 pounds.',
+      quantity: 1,
+      equipped: true,
+      totalWeight: 0.5,
+    });
+
+    const rawCharacterData = {
+      inventory: [
+        {
+          id: 1116957527,
+          entityTypeId: 1439493548,
+          equipped: true,
+          quantity: 1,
+          definition: {
+            id: 422,
+            name: 'Sack',
+            filterType: 'Other Gear',
+            weight: 0.5,
+            cost: 0.01,
+          },
+        },
+        {
+          id: 4,
+          entityTypeId: 1439493548,
+          equipped: true,
+          quantity: 2,
+          definition: {
+            id: 10,
+            name: 'Dagger',
+            filterType: 'Weapon',
+            weight: 1,
+          },
+        },
+      ],
+      customItems: [
+        {
+          id: 25282084,
+          name: 'Handmade Sketchbook',
+          description: '<p>Filled with pressed flowers.</p>',
+          weight: 1,
+          cost: 5,
+          quantity: 1,
+          notes: 'Gift from home',
+        },
+      ],
+      classSpells: [
+        {
+          spells: [
+            {
+              id: 888001,
+              entityTypeId: 435869154,
+              definition: {
+                id: 2001,
+                name: 'Eldritch Blast',
+              },
+            },
+          ],
+        },
+      ],
+      characterValues: [
+        {
+          typeId: 8,
+          value: 'Aldershine Messenger Bag',
+          valueId: '1116957527',
+          valueTypeId: '1439493548',
+        },
+        {
+          typeId: 19,
+          value: 0.5,
+          valueId: '1116957527',
+          valueTypeId: '1439493548',
+        },
+        {
+          typeId: 9,
+          value: 'Stitched with starlight thread',
+          valueId: '1116957527',
+          valueTypeId: '1439493548',
+        },
+        {
+          typeId: 22,
+          value: 1.5,
+          valueId: '4',
+          valueTypeId: '1439493548',
+        },
+        {
+          typeId: 20,
+          value: true,
+          valueId: '4',
+          valueTypeId: '1439493548',
+        },
+        {
+          typeId: 8,
+          value: 'Starlight Blast',
+          valueId: '888001',
+          valueTypeId: '435869154',
+        },
+      ],
+    };
+
+    const once = applyCharacterCustomizations(baseChar, rawCharacterData);
+    const twice = applyCharacterCustomizations(once, rawCharacterData);
+
+    const bag = twice.inventory.find((i) => i.id === 1116957527);
+    assert.equal(bag?.name, 'Aldershine Messenger Bag');
+    assert.equal(bag?.cost, '0.5 gp');
+    assert.deepEqual(bag?.notes, ['Notes: Stitched with starlight thread']);
+
+    const dagger = twice.inventory.find((i) => i.id === 4);
+    assert.equal(dagger?.weight, 1.5);
+    assert.equal(dagger?.totalWeight, 1.5);
+    assert.deepEqual(dagger?.notes, ['Properties: Silvered']);
+
+    const sketchbook = twice.inventory.filter((i) => i.id === 25282084);
+    assert.equal(sketchbook.length, 1);
+    assert.equal(sketchbook[0].name, 'Handmade Sketchbook');
+    assert.equal(sketchbook[0].cost, '5 gp');
+    assert.deepEqual(sketchbook[0].notes, ['Notes: Gift from home']);
+
+    assert.equal(twice.spellcasting?.groups[0][0].name, 'Starlight Blast');
+  });
+
+  it('fetchCharacterWithCustomizations resolves Stella customized Sack as Aldershine Messenger Bag and links if in compendium', async () => {
+    const mockRawApiPayload = {
+      success: true,
+      data: {
+        id: 170163364,
+        name: 'Stella Aldershine',
+        classes: [{ level: 3, definition: { name: 'Warlock', spellCastingAbilityId: 6 } }],
+        stats: [
+          { id: 1, value: 10 },
+          { id: 2, value: 16 },
+          { id: 3, value: 14 },
+          { id: 4, value: 10 },
+          { id: 5, value: 14 },
+          { id: 6, value: 18 },
+        ],
+        inventory: [
+          {
+            id: 1116957527,
+            entityTypeId: 1439493548,
+            equipped: true,
+            quantity: 1,
+            definition: {
+              id: 422,
+              name: 'Sack',
+              filterType: 'Other Gear',
+              weight: 0.5,
+              cost: 0.01,
+              description: '<p>A sack holds up to 30 pounds.</p>',
+            },
+          },
+        ],
+        characterValues: [
+          {
+            typeId: 8,
+            value: 'Aldershine Messenger Bag',
+            valueId: '1116957527',
+            valueTypeId: '1439493548',
+          },
+          {
+            typeId: 19,
+            value: 0.5,
+            valueId: '1116957527',
+            valueTypeId: '1439493548',
+          },
+        ],
+        customItems: [],
+      },
+    };
+
+    const mockFetch: typeof fetch = async (input) => {
+      const urlStr = String(input);
+      if (urlStr.includes('cobalt-token')) {
+        return { ok: false, status: 401, json: async () => ({}) } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        clone: () => ({ json: async () => mockRawApiPayload }) as Response,
+        json: async () => mockRawApiPayload,
+      } as Response;
+    };
+
+    const char = await fetchCharacterWithCustomizations(170163364, { fetchFn: mockFetch });
+    assert.equal(char.inventory[0].name, 'Aldershine Messenger Bag');
+    assert.equal(char.inventory[0].cost, '0.5 gp');
+
+    const mdPlain = formatCharacterJournalMarkdown(char, []);
+    assert.ok(mdPlain.includes('#### Aldershine Messenger Bag (Equipped)'));
+    assert.ok(!mdPlain.includes('#### Sack'));
+
+    const mdLinked = formatCharacterJournalMarkdown(char, [
+      { id: 'bag-1', name: 'Aldershine Messenger Bag', aliases: [] },
+    ]);
+    assert.ok(mdLinked.includes('#### [[Aldershine Messenger Bag]] (Equipped)'));
+  });
+});
+
 

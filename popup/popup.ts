@@ -1,6 +1,5 @@
 import { ArchivistClient, Campaign, Character, Item } from '@astermoe/archivist-sdk';
 import {
-  fetchCharacterById,
   extractCharacterId,
   extractMonsterId,
   fetchMonsterById,
@@ -13,6 +12,7 @@ import {
   ItemData,
 } from '@astermoe/dndbeyond-parser';
 import {
+  fetchCharacterWithCustomizations,
   formatCharacterStatBlock,
   formatMonsterStatBlock,
   formatItemDetails,
@@ -225,7 +225,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncBtn.disabled = true;
 
         try {
-          detectedChar = await fetchCharacterById(charId);
+          detectedChar = await fetchCharacterWithCustomizations(charId);
           setEntityState('ready', 'Character Detected', detectedChar.name);
           entityMeta.textContent = `Level ${detectedChar.totalLevel} ${detectedChar.species} ${detectedChar.classLine}`;
           itemImportOptions.classList.remove('hidden');

@@ -1,7 +1,6 @@
 import { ArchivistClient, Campaign, Character, Item } from "@astermoe/archivist-sdk";
 import {
   extractCharacterId,
-  fetchCharacterById,
   extractMonsterId,
   fetchMonsterById,
   parseMonsterDom,
@@ -10,6 +9,7 @@ import {
   parseItemDom,
 } from "@astermoe/dndbeyond-parser";
 import {
+  fetchCharacterWithCustomizations,
   isEligibleMagicItem,
   formatCharacterStatBlock,
   formatMonsterStatBlock,
@@ -639,7 +639,7 @@ import {
       if (url.includes("/characters/")) {
         const charId = extractCharacterId(url);
         if (!charId) return;
-        const char = await fetchCharacterById(charId);
+        const char = await fetchCharacterWithCustomizations(charId);
 
         // Search across all campaigns in parallel
         const results = await Promise.all(
@@ -929,7 +929,7 @@ import {
         if (isChar) {
           const charId = extractCharacterId(url);
           if (charId) {
-            const char = await fetchCharacterById(charId);
+            const char = await fetchCharacterWithCustomizations(charId);
             entityName = char.name;
           }
         } else if (isMonster) {
@@ -970,7 +970,7 @@ import {
         if (!charId) throw new Error("Could not identify character ID from URL.");
 
         showToast("🔮 Fetching character details from D&D Beyond...", "info");
-        const char = await fetchCharacterById(charId);
+        const char = await fetchCharacterWithCustomizations(charId);
 
         const { data: charList } = (await client.characters.list({
           campaign_id: targetCampaignId,
@@ -1245,7 +1245,7 @@ import {
       if (!charId) return;
 
       showToast("🔮 Fetching character backstory from Archivist...", "info");
-      const char = await fetchCharacterById(charId);
+      const char = await fetchCharacterWithCustomizations(charId);
 
       // Search all campaigns if not already matched
       if (!matchedEntity) {

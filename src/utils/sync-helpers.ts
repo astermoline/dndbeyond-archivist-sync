@@ -1,5 +1,14 @@
 import { ArchivistClient, type Item } from "@astermoe/archivist-sdk";
-import { type CharacterData, type MonsterData, type ItemData, characterToMarkdown } from '@astermoe/dndbeyond-parser';
+import {
+  type CharacterData,
+  type MonsterData,
+  type ItemData,
+  type InventoryItemData,
+  type FetchCharacterOptions,
+  characterToMarkdown,
+  fetchCharacterById,
+  htmlToMarkdown,
+} from '@astermoe/dndbeyond-parser';
 
 export const ELIGIBLE_MAGIC_ITEM_RARITIES = [
   'uncommon',
@@ -292,6 +301,467 @@ export function convertMarkdownTablesToArchivist(text: string): string {
 
     return `[TABLE]\n${colLine}\n${rowLines.join('\n')}\n[/TABLE]\n`;
   });
+}
+
+function getRawCharacterCustomValue(
+  characterValues: any[] | undefined,
+  entityId: string | number | undefined | null,
+  entityTypeId: string | number | undefined | null,
+  typeId: number
+): any {
+  if (!Array.isArray(characterValues) || entityId === undefined || entityId === null) {
+    return undefined;
+  }
+  const idStr = String(entityId);
+  const typeIdStr = entityTypeId !== undefined && entityTypeId !== null ? String(entityTypeId) : null;
+
+  for (let i = characterValues.length - 1; i >= 0; i--) {
+    const cv = characterValues[i];
+    if (!cv || cv.typeId !== typeId || String(cv.valueId) !== idStr) continue;
+    if (typeIdStr !== null && cv.valueTypeId !== undefined && cv.valueTypeId !== null) {
+      if (String(cv.valueTypeId) !== typeIdStr) continue;
+    }
+    if (cv.value !== undefined && cv.value !== null) {
+      return cv.value;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Applies D&D Beyond `characterValues` overrides (custom names, notes, weight/cost overrides,
+ * silvered/adamantine properties, weapon bonuses, spell customizations) and `customItems`
+ * idempotently onto a parsed `CharacterData` object.
+ */
+export function applyCharacterCustomizations(
+  char: CharacterData,
+  rawCharacterData: any
+): CharacterData {
+  const d = rawCharacterData?.data || rawCharacterData;
+  if (!d || typeof d !== 'object') {
+    return char;
+  }
+
+  const characterValues: any[] = Array.isArray(d.characterValues) ? d.characterValues : [];
+  const rawInventory: any[] = Array.isArray(d.inventory) ? d.inventory : [];
+  const rawInventoryById = new Map<string, any>();
+  for (const rawItem of rawInventory) {
+    const itemId = rawItem?.id ?? rawItem?.definition?.id;
+    if (itemId !== undefined && itemId !== null) {
+      rawInventoryById.set(String(itemId), rawItem);
+    }
+  }
+
+  const updatedInventory: InventoryItemData[] = (char.inventory || []).map((invItem) => {
+    const rawItem =
+      invItem.id !== undefined && invItem.id !== null
+        ? rawInventoryById.get(String(invItem.id))
+        : undefined;
+    if (!rawItem) {
+      return invItem;
+    }
+
+    const itemId = rawItem.id;
+    const entityTypeId = rawItem.entityTypeId;
+
+    const rawCustomName = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 8);
+    const customName =
+      typeof rawCustomName === 'string' && rawCustomName.trim() ? rawCustomName.trim() : undefined;
+    const name = customName || invItem.name;
+
+    const rawCustomWeight = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 22);
+    const parsedCustomWeight =
+      rawCustomWeight !== undefined && rawCustomWeight !== null && rawCustomWeight !== ''
+        ? Number(rawCustomWeight)
+        : NaN;
+    const qty = invItem.quantity ?? 1;
+    const weight = !Number.isNaN(parsedCustomWeight) ? parsedCustomWeight : invItem.weight;
+    const totalWeight =
+      !Number.isNaN(parsedCustomWeight)
+        ? parseFloat((qty * parsedCustomWeight).toFixed(1))
+        : invItem.totalWeight;
+
+    const rawCustomCost = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 19);
+    const parsedCustomCost =
+      rawCustomCost !== undefined && rawCustomCost !== null && rawCustomCost !== ''
+        ? Number(rawCustomCost)
+        : NaN;
+    const cost = !Number.isNaN(parsedCustomCost) ? `${parsedCustomCost} gp` : invItem.cost;
+
+    const notes = invItem.notes ? [...invItem.notes] : [];
+    const isSilvered = Boolean(getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 20));
+    const isAdamantine = Boolean(
+      getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 21)
+    );
+    if (isSilvered || isAdamantine) {
+      const propIdx = notes.findIndex((n) => n.startsWith('Properties: '));
+      const existingProps =
+        propIdx !== -1
+          ? notes[propIdx]
+              .slice('Properties: '.length)
+              .split(',')
+              .map((p) => p.trim())
+              .filter(Boolean)
+          : [];
+      if (isSilvered && !existingProps.includes('Silvered')) existingProps.push('Silvered');
+      if (isAdamantine && !existingProps.includes('Adamantine')) existingProps.push('Adamantine');
+      if (existingProps.length > 0) {
+        const propLine = `Properties: ${existingProps.join(', ')}`;
+        if (propIdx !== -1) {
+          notes[propIdx] = propLine;
+        } else {
+          notes.unshift(propLine);
+        }
+      }
+    }
+
+    const rawToHitBonus = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 12);
+    if (rawToHitBonus !== undefined && rawToHitBonus !== null && rawToHitBonus !== '') {
+      const num = Number(rawToHitBonus);
+      if (!Number.isNaN(num) && num !== 0) {
+        const entry = `To-Hit Bonus: ${num > 0 ? `+${num}` : num}`;
+        if (!notes.includes(entry)) notes.push(entry);
+      }
+    }
+
+    const rawDamageBonus = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 10);
+    if (rawDamageBonus !== undefined && rawDamageBonus !== null && rawDamageBonus !== '') {
+      const num = Number(rawDamageBonus);
+      let entry: string | undefined;
+      if (!Number.isNaN(num) && num !== 0) {
+        entry = `Damage Bonus: ${num > 0 ? `+${num}` : num}`;
+      } else if (Number.isNaN(num) && String(rawDamageBonus).trim()) {
+        entry = `Damage Bonus: ${String(rawDamageBonus).trim()}`;
+      }
+      if (entry && !notes.includes(entry)) notes.push(entry);
+    }
+
+    let description = invItem.description || '';
+    const rawCustomNotes = getRawCharacterCustomValue(characterValues, itemId, entityTypeId, 9);
+    if (typeof rawCustomNotes === 'string' && rawCustomNotes.trim()) {
+      const cleanedNotes = rawCustomNotes.replace(/\r\n/g, '\n').trim();
+      if (cleanedNotes.includes('\n')) {
+        const prefix = `**Notes:** ${cleanedNotes}`;
+        if (!description.startsWith(prefix)) {
+          description = description ? `${prefix}\n\n${description}` : prefix;
+        }
+      } else {
+        const noteEntry = `Notes: ${cleanedNotes}`;
+        if (!notes.includes(noteEntry)) notes.push(noteEntry);
+      }
+    }
+
+    return {
+      ...invItem,
+      name,
+      weight,
+      totalWeight,
+      cost,
+      description,
+      notes: notes.length > 0 ? notes : undefined,
+    };
+  });
+
+  if (Array.isArray(d.customItems)) {
+    const existingIds = new Set(
+      updatedInventory
+        .filter((i) => i.id !== undefined && i.id !== null)
+        .map((i) => String(i.id))
+    );
+
+    for (const ci of d.customItems) {
+      if (!ci || !ci.name) continue;
+      if (ci.id !== undefined && ci.id !== null && existingIds.has(String(ci.id))) {
+        continue;
+      }
+
+      const qty = ci.quantity ?? 1;
+      const parsedWt =
+        ci.weight !== undefined && ci.weight !== null && ci.weight !== '' ? Number(ci.weight) : 0;
+      const wt = !Number.isNaN(parsedWt) ? parsedWt : 0;
+      const totalWeight = parseFloat((qty * wt).toFixed(1));
+
+      let cost: string | undefined;
+      if (ci.cost !== undefined && ci.cost !== null && ci.cost !== '') {
+        const costStr = String(ci.cost).trim();
+        if (costStr && Number(costStr) !== 0) {
+          cost = /[a-z]/i.test(costStr) ? costStr : `${costStr} gp`;
+        }
+      }
+
+      const notes: string[] = [];
+      let description = htmlToMarkdown(ci.description || '');
+      if (typeof ci.notes === 'string' && ci.notes.trim()) {
+        const cleanedNotes = ci.notes.replace(/\r\n/g, '\n').trim();
+        if (cleanedNotes.includes('\n')) {
+          description = description ? `**Notes:** ${cleanedNotes}\n\n${description}` : `**Notes:** ${cleanedNotes}`;
+        } else {
+          notes.push(`Notes: ${cleanedNotes}`);
+        }
+      }
+
+      if (ci.id !== undefined && ci.id !== null) {
+        existingIds.add(String(ci.id));
+      }
+
+      updatedInventory.push({
+        id: ci.id,
+        name: String(ci.name).trim(),
+        type: ci.type || 'Other Gear',
+        requiresAttunement: false,
+        weight: wt,
+        cost,
+        description,
+        notes: notes.length > 0 ? notes : undefined,
+        tags: [],
+        quantity: qty,
+        equipped: Boolean(ci.equipped),
+        totalWeight,
+        containerId: ci.containerEntityId || null,
+      });
+    }
+  }
+
+  let updatedSpellcasting = char.spellcasting;
+  if (char.spellcasting && characterValues.length > 0) {
+    const rawSpells: any[] = [];
+    if (Array.isArray(d.classSpells)) {
+      for (const cs of d.classSpells) {
+        if (Array.isArray(cs?.spells)) rawSpells.push(...cs.spells);
+      }
+    }
+    if (d.spells && typeof d.spells === 'object') {
+      for (const key of ['class', 'feat', 'race', 'item', 'background']) {
+        if (Array.isArray(d.spells[key])) rawSpells.push(...d.spells[key]);
+      }
+    }
+
+    const spellOverrides: Array<{
+      id: string;
+      defName: string;
+      customName?: string;
+      customNotes?: string;
+    }> = [];
+
+    for (const rs of rawSpells) {
+      const defName = rs?.definition?.name;
+      if (!defName || rs?.id === undefined || rs?.id === null) continue;
+      const rawCustomName = getRawCharacterCustomValue(
+        characterValues,
+        rs.id,
+        rs.entityTypeId,
+        8
+      );
+      const rawCustomNotes = getRawCharacterCustomValue(
+        characterValues,
+        rs.id,
+        rs.entityTypeId,
+        9
+      );
+      const customName =
+        typeof rawCustomName === 'string' && rawCustomName.trim()
+          ? rawCustomName.trim()
+          : undefined;
+      const customNotes =
+        typeof rawCustomNotes === 'string' && rawCustomNotes.trim()
+          ? rawCustomNotes.replace(/\r\n/g, '\n').trim()
+          : undefined;
+      if (customName || customNotes) {
+        spellOverrides.push({
+          id: String(rs.id),
+          defName,
+          customName,
+          customNotes,
+        });
+      }
+    }
+
+    if (spellOverrides.length > 0) {
+      const updatedGroups: Record<number, typeof char.spellcasting.groups[number]> = {};
+      for (const [lvlKey, spells] of Object.entries(char.spellcasting.groups)) {
+        let renamedInGroup = false;
+        const nextSpells = spells.map((spell) => {
+          const override = spellOverrides.find(
+            (o) =>
+              (spell.id !== undefined && String(spell.id) === o.id) ||
+              spell.name === o.customName ||
+              spell.name === o.defName
+          );
+          if (!override) return spell;
+
+          const nextName = override.customName || spell.name;
+          if (nextName !== spell.name) renamedInGroup = true;
+
+          let nextDesc = spell.description || '';
+          if (override.customNotes) {
+            const prefix = `**Notes:** ${override.customNotes}`;
+            if (!nextDesc.startsWith(prefix)) {
+              nextDesc = nextDesc ? `${prefix}\n\n${nextDesc}` : prefix;
+            }
+          }
+
+          return {
+            ...spell,
+            name: nextName,
+            description: nextDesc,
+          };
+        });
+
+        if (renamedInGroup) {
+          nextSpells.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        updatedGroups[Number(lvlKey)] = nextSpells;
+      }
+
+      updatedSpellcasting = {
+        ...char.spellcasting,
+        groups: updatedGroups,
+      };
+    }
+  }
+
+  let updatedFeatures = char.features;
+  if (Array.isArray(char.features) && char.features.length > 0 && characterValues.length > 0) {
+    const rawFeatureDefs: any[] = [];
+    if (Array.isArray(d.race?.racialTraits)) {
+      for (const t of d.race.racialTraits) {
+        if (t?.definition) rawFeatureDefs.push(t.definition);
+      }
+    }
+    if (Array.isArray(d.classes)) {
+      for (const cls of d.classes) {
+        if (Array.isArray(cls?.classFeatures)) {
+          for (const f of cls.classFeatures) {
+            if (f?.definition) rawFeatureDefs.push(f.definition);
+          }
+        }
+      }
+    }
+    if (Array.isArray(d.feats)) {
+      for (const f of d.feats) {
+        if (f?.definition) rawFeatureDefs.push(f.definition);
+      }
+    }
+
+    const featureOverrides: Array<{
+      defName: string;
+      customName?: string;
+      customNotes?: string;
+    }> = [];
+
+    for (const def of rawFeatureDefs) {
+      if (!def?.name || def.id === undefined || def.id === null) continue;
+      const rawCustomName = getRawCharacterCustomValue(
+        characterValues,
+        def.id,
+        def.entityTypeId,
+        8
+      );
+      const rawCustomNotes = getRawCharacterCustomValue(
+        characterValues,
+        def.id,
+        def.entityTypeId,
+        9
+      );
+      const customName =
+        typeof rawCustomName === 'string' && rawCustomName.trim()
+          ? rawCustomName.trim()
+          : undefined;
+      const customNotes =
+        typeof rawCustomNotes === 'string' && rawCustomNotes.trim()
+          ? rawCustomNotes.replace(/\r\n/g, '\n').trim()
+          : undefined;
+      if (customName || customNotes) {
+        featureOverrides.push({
+          defName: def.name,
+          customName,
+          customNotes,
+        });
+      }
+    }
+
+    if (featureOverrides.length > 0) {
+      updatedFeatures = char.features.map((feat) => {
+        const override = featureOverrides.find(
+          (o) => feat.name === o.customName || feat.name === o.defName
+        );
+        if (!override) return feat;
+        let nextDesc = feat.description || '';
+        if (override.customNotes) {
+          const prefix = `**Notes:** ${override.customNotes}`;
+          if (!nextDesc.startsWith(prefix)) {
+            nextDesc = nextDesc ? `${prefix}\n\n${nextDesc}` : prefix;
+          }
+        }
+        return {
+          ...feat,
+          name: override.customName || feat.name,
+          description: nextDesc,
+        };
+      });
+    }
+  }
+
+  return {
+    ...char,
+    features: updatedFeatures,
+    inventory: updatedInventory,
+    spellcasting: updatedSpellcasting,
+  };
+}
+
+/**
+ * Fetches a D&D Beyond character by ID or URL and applies sheet customizations
+ * (`characterValues` and `customItems`).
+ */
+export async function fetchCharacterWithCustomizations(
+  characterId: string | number,
+  options: FetchCharacterOptions = {}
+): Promise<CharacterData> {
+  let capturedRawData: any = null;
+  const baseFetch = options.fetchFn || globalThis.fetch.bind(globalThis);
+
+  const interceptingFetch: typeof fetch = async (input, init) => {
+    const res = await baseFetch(input, init);
+    const urlStr =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (res.ok && urlStr.includes('/character/v5/character/')) {
+      try {
+        if (typeof res.clone === 'function') {
+          const json = await res.clone().json();
+          if (json?.data) {
+            capturedRawData = json.data;
+          }
+        } else {
+          const json = await res.json();
+          if (json?.data) {
+            capturedRawData = json.data;
+          }
+          return {
+            ...res,
+            json: async () => json,
+          } as Response;
+        }
+      } catch {
+        // Ignore clone/json errors and let fetchCharacterById process the response normally
+      }
+    }
+
+    return res;
+  };
+
+  const char = await fetchCharacterById(characterId, {
+    ...options,
+    fetchFn: interceptingFetch,
+  });
+
+  return capturedRawData ? applyCharacterCustomizations(char, capturedRawData) : char;
 }
 
 export interface CompendiumItemRef {
