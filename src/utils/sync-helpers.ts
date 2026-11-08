@@ -510,10 +510,10 @@ export function applyCharacterCustomizations(
       const existingProps =
         propIdx !== -1
           ? notes[propIdx]
-            .slice('Properties: '.length)
-            .split(',')
-            .map((p) => p.trim())
-            .filter(Boolean)
+              .slice('Properties: '.length)
+              .split(',')
+              .map((p) => p.trim())
+              .filter(Boolean)
           : [];
       if (isSilvered && !existingProps.includes('Silvered')) existingProps.push('Silvered');
       if (isAdamantine && !existingProps.includes('Adamantine')) existingProps.push('Adamantine');
@@ -1343,16 +1343,16 @@ export function parseInlineMarkdown(
   return nodes.length > 0
     ? nodes
     : [
-      {
-        mode: 'normal',
-        text: '',
-        type: 'text',
-        style: '',
-        detail: 0,
-        format: 0,
-        version: 1,
-      },
-    ];
+        {
+          mode: 'normal',
+          text: '',
+          type: 'text',
+          style: '',
+          detail: 0,
+          format: 0,
+          version: 1,
+        },
+      ];
 }
 
 export function createLexicalParagraph(children: LexicalInlineNode[]) {
