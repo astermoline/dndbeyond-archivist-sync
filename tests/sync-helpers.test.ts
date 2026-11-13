@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ArchivistClient, type Item } from '@astermoe/archivist-sdk';
-import { type CharacterData } from '@astermoe/dndbeyond-parser';
+import { ArchivistClient, type Character, type Item } from '@astermoe/archivist-sdk';
+import { type CharacterData, type MonsterData } from '@astermoe/dndbeyond-parser';
 import {
   applyCharacterCustomizations,
   fetchCharacterWithCustomizations,
@@ -10,6 +10,10 @@ import {
   formatCharacterJournalMarkdown,
   listAllCampaignItems,
   syncCharacterMagicItems,
+  isCreatureEntity,
+  getArchivistCompendiumUrl,
+  findMatchingCharacterOrCreature,
+  syncMonsterToArchivist,
 } from '../src/utils/sync-helpers.ts';
 
 function createMockStellaCharacter(): CharacterData {
@@ -717,6 +721,235 @@ describe('D&D Beyond character customizations', () => {
     assert.ok(journalMd.includes('#### [[Dagger]] (Equipped)'));
     assert.ok(journalMd.includes('#### [[Pressed Bramble Flower]]'));
     assert.ok(journalMd.includes('#### Cloak of Billowing (Equipped)'));
+  });
+});
+
+describe('Monster / Creature Compendium Sync', () => {
+  function createMockMonster(name = 'Owlbear'): MonsterData {
+    const defaultAbility = {
+      score: 10,
+      modifier: '+0',
+      modValue: 0,
+      save: '+0',
+      saveValue: 0,
+      isProficient: false,
+    };
+
+    return {
+      name,
+      size: 'Large',
+      type: 'Monstrosity',
+      alignment: 'Unaligned',
+      ac: { value: 13, formula: 'natural armor' },
+      hp: { value: 59, formula: '7d10 + 21' },
+      speed: '40 ft.',
+      abilities: {
+        strength: { ...defaultAbility, score: 20, modifier: '+5', modValue: 5 },
+        dexterity: { ...defaultAbility, score: 12, modifier: '+1', modValue: 1 },
+        constitution: { ...defaultAbility, score: 17, modifier: '+3', modValue: 3 },
+        intelligence: { ...defaultAbility, score: 3, modifier: '-4', modValue: -4 },
+        wisdom: { ...defaultAbility, score: 12, modifier: '+1', modValue: 1 },
+        charisma: { ...defaultAbility, score: 7, modifier: '-2', modValue: -2 },
+      },
+      senses: ['Darkvision 60 ft.', 'Passive Perception 13'],
+      languages: ['—'],
+      cr: '3',
+      xp: 700,
+      traits: [{ name: 'Keen Sight and Smell', description: 'Advantage on Perception checks.' }],
+      actions: [{ name: 'Multiattack', description: 'Makes two attacks: one beak and one claws.' }],
+      imageUrl: 'https://www.dndbeyond.com/avatars/owlbear.png',
+    };
+  }
+
+  it('creates new monsters with type Creature by default and resolves Creature compendium URLs', async () => {
+    const createdPayloads: any[] = [];
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = init?.method || 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+      if (method === 'GET' && urlStr.includes('/v1/characters?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [], total: 0, page: 1, size: 100, pages: 1 }),
+        } as Response;
+      }
+
+      if (method === 'POST' && urlStr.endsWith('/v1/characters')) {
+        createdPayloads.push(body);
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({
+            id: 'creature_1',
+            campaign_id: body.campaign_id,
+            character_name: body.character_name,
+            character_aliases: [],
+            type: body.type,
+            description: body.description,
+            image: body.image,
+            merge: false,
+            created_at: '2026-11-13T00:00:00Z',
+          }),
+        } as Response;
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlStr}`);
+    };
+
+    const client = new ArchivistClient({
+      apiKey: 'test-key',
+      fetchFn: mockFetch as typeof fetch,
+    });
+
+    const monster = createMockMonster('Owlbear');
+    const result = await syncMonsterToArchivist(
+      client,
+      'camp_1',
+      monster,
+      'https://www.dndbeyond.com/monsters/16975-owlbear'
+    );
+
+    assert.equal(result.action, 'created');
+    assert.equal(createdPayloads.length, 1);
+    assert.equal(createdPayloads[0].type, 'Creature');
+    assert.equal(createdPayloads[0].character_name, 'Owlbear');
+    assert.equal(isCreatureEntity(result.entity), true);
+    assert.equal(
+      getArchivistCompendiumUrl(result.entity),
+      'https://app.myarchivist.ai/compendium/creatures/creature_1?section=creatures'
+    );
+  });
+
+  it('finds and updates existing entries regardless of whether they are in Creatures or promoted to NPCs in Characters', async () => {
+    const dbEntities: Record<string, Character> = {
+      npc_1: {
+        id: 'npc_1',
+        campaign_id: 'camp_1',
+        character_name: 'Klarg',
+        character_aliases: ['Bugbear Chief'],
+        type: 'NPC',
+        description: 'Leader of the Cragmaw hideout.\n\n### Stat Block\nOld stat block\n---\n[View on D&D Beyond](https://www.dndbeyond.com/monsters/bugbear)',
+        image: 'https://www.dndbeyond.com/avatars/klarg-custom.png',
+        merge: false,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      creature_2: {
+        id: 'creature_2',
+        campaign_id: 'camp_1',
+        character_name: 'Dire Wolf',
+        character_aliases: [],
+        type: 'Creature' as any,
+        description: 'Pack hunter encountered in the woods.',
+        image: undefined,
+        merge: false,
+        created_at: '2026-11-10T00:00:00Z',
+      },
+    };
+
+    const patchPayloads: Array<{ id: string; body: any }> = [];
+
+    const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      const method = init?.method || 'GET';
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+      if (method === 'GET' && urlStr.includes('/v1/characters?')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: Object.values(dbEntities),
+            total: 2,
+            page: 1,
+            size: 100,
+            pages: 1,
+          }),
+        } as Response;
+      }
+
+      const charIdMatch = urlStr.match(/\/v1\/characters\/([^?]+)/);
+      if (charIdMatch) {
+        const id = decodeURIComponent(charIdMatch[1]);
+        if (method === 'GET') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => dbEntities[id],
+          } as Response;
+        }
+        if (method === 'PATCH') {
+          patchPayloads.push({ id, body });
+          dbEntities[id] = {
+            ...dbEntities[id],
+            ...body,
+          };
+          return {
+            ok: true,
+            status: 200,
+            json: async () => dbEntities[id],
+          } as Response;
+        }
+      }
+
+      throw new Error(`Unexpected request: ${method} ${urlStr}`);
+    };
+
+    const client = new ArchivistClient({
+      apiKey: 'test-key',
+      fetchFn: mockFetch as typeof fetch,
+    });
+
+    // 1. Monster that rose to a full NPC in Characters (matched by name or alias) updates in-place in Characters
+    const bugbearChief = createMockMonster('Bugbear Chief');
+    const npcResult = await syncMonsterToArchivist(
+      client,
+      'camp_1',
+      bugbearChief,
+      'https://www.dndbeyond.com/monsters/bugbear-chief'
+    );
+
+    assert.equal(npcResult.action, 'updated');
+    assert.equal(npcResult.entity.id, 'npc_1');
+    assert.equal(npcResult.entity.type, 'NPC');
+    assert.equal(npcResult.entity.character_name, 'Klarg');
+    assert.equal(patchPayloads[0].body.type, undefined);
+    assert.ok(npcResult.entity.description?.startsWith('Leader of the Cragmaw hideout.'));
+    assert.ok(npcResult.entity.description?.includes('**Large Monstrosity, Unaligned**'));
+    assert.equal(
+      getArchivistCompendiumUrl(npcResult.entity),
+      'https://app.myarchivist.ai/compendium/characters/npc_1?section=characters'
+    );
+
+    // 2. Monster in Creatures updates in-place in Creatures
+    const direWolf = createMockMonster('Dire Wolf');
+    const creatureResult = await syncMonsterToArchivist(
+      client,
+      'camp_1',
+      direWolf,
+      'https://www.dndbeyond.com/monsters/dire-wolf'
+    );
+
+    assert.equal(creatureResult.action, 'updated');
+    assert.equal(creatureResult.entity.id, 'creature_2');
+    assert.equal(creatureResult.entity.type, 'Creature');
+    assert.equal(patchPayloads[1].body.type, undefined);
+    assert.ok(creatureResult.entity.description?.startsWith('Pack hunter encountered in the woods.'));
+    assert.equal(
+      getArchivistCompendiumUrl(creatureResult.entity),
+      'https://app.myarchivist.ai/compendium/creatures/creature_2?section=creatures'
+    );
+
+    // 3. Direct matcher check
+    assert.equal(
+      findMatchingCharacterOrCreature(Object.values(dbEntities), 'klarg')?.id,
+      'npc_1'
+    );
+    assert.equal(
+      findMatchingCharacterOrCreature(Object.values(dbEntities), 'dire wolf')?.id,
+      'creature_2'
+    );
   });
 });
 

@@ -1,4 +1,4 @@
-import { ArchivistClient, type Item } from "@astermoe/archivist-sdk";
+import { ArchivistClient, type Character, type Item } from "@astermoe/archivist-sdk";
 import {
   type CharacterData,
   type MonsterData,
@@ -996,6 +996,156 @@ export async function listAllCampaignItems(
   }
 
   return allItems;
+}
+
+/**
+ * Determines whether a compendium Character/Creature record has type "Creature".
+ */
+export function isCreatureEntity(entity?: { type?: string | null } | null): boolean {
+  return Boolean(entity?.type && entity.type.trim().toLowerCase() === 'creature');
+}
+
+/**
+ * Builds the web app URL for viewing a Character, Creature, or Item in the Archivist compendium.
+ */
+export function getArchivistCompendiumUrl(
+  entity: { id: string; type?: string | null },
+  isItem = false
+): string {
+  if (isItem) {
+    return `https://app.myarchivist.ai/compendium/items/${entity.id}?section=items`;
+  }
+  if (isCreatureEntity(entity)) {
+    return `https://app.myarchivist.ai/compendium/creatures/${entity.id}?section=creatures`;
+  }
+  return `https://app.myarchivist.ai/compendium/characters/${entity.id}?section=characters`;
+}
+
+/**
+ * Fetches all compendium Character and Creature records in an Archivist campaign across pages.
+ */
+export async function listAllCampaignCharacters(
+  client: ArchivistClient,
+  campaignId: string
+): Promise<Character[]> {
+  const allCharacters: Character[] = [];
+  let page = 1;
+  const size = 100;
+  const maxPages = 20;
+
+  while (page <= maxPages) {
+    const res = (await client.characters.list({
+      campaign_id: campaignId,
+      page,
+      size,
+      with_links: true,
+    })) as { data?: Character[]; pages?: number } | Character[];
+    const batch = Array.isArray(res) ? res : res?.data || [];
+    allCharacters.push(...batch);
+
+    const totalPages = !Array.isArray(res) && typeof res?.pages === 'number' ? res.pages : 1;
+    if (page >= totalPages || batch.length === 0) {
+      break;
+    }
+    page++;
+  }
+
+  return allCharacters;
+}
+
+/**
+ * Finds an existing Character or Creature entry by name or alias (case-insensitive),
+ * regardless of whether its type is "Creature", "NPC", "PC", or "Other".
+ */
+export function findMatchingCharacterOrCreature(
+  characters: Character[],
+  name: string
+): Character | null {
+  if (!name || !Array.isArray(characters) || characters.length === 0) {
+    return null;
+  }
+  const targetLower = name.trim().toLowerCase();
+  if (!targetLower) {
+    return null;
+  }
+
+  const exactNameMatch = characters.find(
+    (c) => c.character_name?.trim().toLowerCase() === targetLower
+  );
+  if (exactNameMatch) {
+    return exactNameMatch;
+  }
+
+  const aliasMatch = characters.find((c) =>
+    c.character_aliases?.some((a) => a?.trim().toLowerCase() === targetLower)
+  );
+  return aliasMatch || null;
+}
+
+/**
+ * Syncs a D&D Beyond monster stat block into Archivist.
+ * Searches for any existing entry matching the monster's name or aliases across both Creatures and Characters:
+ * - If found, updates the existing entry in-place while preserving its current type (e.g. if promoted to an NPC in Characters).
+ * - If not found, creates a new entry with `type: 'Creature'` by default.
+ */
+export async function syncMonsterToArchivist(
+  client: ArchivistClient,
+  campaignId: string,
+  monster: MonsterData,
+  ddbUrl: string,
+  existingMatch?: Character | null
+): Promise<{ entity: Character; action: 'created' | 'updated' }> {
+  const statBlock = formatMonsterStatBlock(monster, ddbUrl);
+
+  let existing = existingMatch ?? null;
+  if (!existing) {
+    const charList = await listAllCampaignCharacters(client, campaignId);
+    existing = findMatchingCharacterOrCreature(charList, monster.name);
+  }
+
+  if (existing) {
+    const fresh = await client.characters.get(existing.id, { with_links: true });
+    const mergedDesc = mergeStatBlockIntoDescription(
+      fresh.description || existing.description || '',
+      statBlock,
+      '### Stat Block'
+    );
+    const preservedName =
+      fresh.character_name &&
+      fresh.character_name.trim().toLowerCase() !== monster.name.trim().toLowerCase()
+        ? fresh.character_name
+        : monster.name;
+    const updatePayload: any = {
+      character_name: preservedName,
+      description: mergedDesc,
+    };
+    const currentImage = fresh.image ?? existing.image;
+    if ((!currentImage || isLowResThumbnail(currentImage)) && monster.imageUrl) {
+      updatePayload.image = monster.imageUrl;
+    }
+    const updated = await client.characters.update(existing.id, updatePayload);
+    return {
+      entity: updated || {
+        ...fresh,
+        ...updatePayload,
+        type: fresh.type || existing.type,
+      },
+      action: 'updated',
+    };
+  }
+
+  const created = await client.characters.create({
+    campaign_id: campaignId,
+    character_name: monster.name,
+    type: 'Creature' as any,
+    description: statBlock,
+    image: monster.imageUrl,
+  });
+
+  return {
+    entity: created,
+    action: 'created',
+  };
 }
 
 /**

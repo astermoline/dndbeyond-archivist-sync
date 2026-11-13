@@ -14,7 +14,6 @@ import {
 import {
   fetchCharacterWithCustomizations,
   formatCharacterStatBlock,
-  formatMonsterStatBlock,
   formatItemDetails,
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
@@ -24,6 +23,11 @@ import {
   syncCharacterJournalEntry,
   listAllCampaignItems,
   syncCharacterMagicItems,
+  isCreatureEntity,
+  getArchivistCompendiumUrl,
+  listAllCampaignCharacters,
+  findMatchingCharacterOrCreature,
+  syncMonsterToArchivist,
 } from '../src/utils/sync-helpers';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -318,24 +322,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (detectedType === 'character' && detectedChar) {
       try {
-        const { data: charList } = (await client.characters.list({
-          campaign_id: selectedCampaignId,
-          size: 100,
-          with_links: true,
-        })) as { data: Character[] };
-
-        existingCharacter =
-          charList.find(
-            (c) =>
-              c.character_name.toLowerCase() === detectedChar!.name.toLowerCase() ||
-              c.character_aliases?.some((a) => a.toLowerCase() === detectedChar!.name.toLowerCase())
-          ) || null;
+        const charList = await listAllCampaignCharacters(client, selectedCampaignId);
+        existingCharacter = findMatchingCharacterOrCreature(charList, detectedChar.name);
 
         if (existingCharacter) {
           statusDot.className = 'status-dot matched';
           entityStatusLabel.textContent = 'Matched in Campaign';
           syncBtnText.textContent = 'Sync / Update Character';
-          openArchivistLink.href = `https://app.myarchivist.ai/compendium/characters/${existingCharacter.id}?section=characters`;
+          openArchivistLink.href = getArchivistCompendiumUrl(existingCharacter);
           openArchivistLink.classList.remove('hidden');
           updateBackstoryBtn.classList.remove('hidden');
         } else {
@@ -352,28 +346,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } else if (detectedType === 'monster' && detectedMonster) {
       try {
-        const { data: charList } = (await client.characters.list({
-          campaign_id: selectedCampaignId,
-          size: 100,
-        })) as { data: Character[] };
-
-        existingMonster =
-          charList.find(
-            (c) =>
-              c.character_name.toLowerCase() === detectedMonster!.name.toLowerCase() ||
-              c.character_aliases?.some((a) => a.toLowerCase() === detectedMonster!.name.toLowerCase())
-          ) || null;
+        const charList = await listAllCampaignCharacters(client, selectedCampaignId);
+        existingMonster = findMatchingCharacterOrCreature(charList, detectedMonster.name);
 
         if (existingMonster) {
           statusDot.className = 'status-dot matched';
-          entityStatusLabel.textContent = 'Monster Matched in Campaign';
+          entityStatusLabel.textContent = isCreatureEntity(existingMonster)
+            ? 'Creature Matched in Campaign'
+            : 'Monster Matched in Characters';
           syncBtnText.textContent = 'Sync / Update Monster';
-          openArchivistLink.href = `https://app.myarchivist.ai/compendium/characters/${existingMonster.id}?section=characters`;
+          openArchivistLink.href = getArchivistCompendiumUrl(existingMonster);
           openArchivistLink.classList.remove('hidden');
         } else {
           statusDot.className = 'status-dot ready';
-          entityStatusLabel.textContent = 'New Monster (Ready to Import)';
-          syncBtnText.textContent = 'Import Monster to Archivist';
+          entityStatusLabel.textContent = 'New Creature (Ready to Import)';
+          syncBtnText.textContent = 'Import Creature to Archivist';
           openArchivistLink.classList.add('hidden');
         }
         updateBackstoryBtn.classList.add('hidden');
@@ -507,34 +494,17 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.error('[Archives Beyond Popup] Failed to sync journal entry:', journalErr);
         }
       } else if (detectedType === 'monster' && detectedMonster) {
-        const monsterStatBlock = formatMonsterStatBlock(detectedMonster, activeTabUrl);
-
-        if (existingMonster) {
-          existingMonster = await client.characters.get(existingMonster.id, { with_links: true });
-          const mergedDescription = mergeStatBlockIntoDescription(
-            existingMonster.description || '',
-            monsterStatBlock,
-            '### Stat Block'
-          );
-
-          const updateMonPayload: any = {
-            character_name: detectedMonster.name,
-            description: mergedDescription,
-          };
-          if (!existingMonster.image && detectedMonster.imageUrl) {
-            updateMonPayload.image = detectedMonster.imageUrl;
-          }
-          await client.characters.update(existingMonster.id, updateMonPayload);
+        const result = await syncMonsterToArchivist(
+          client,
+          selectedCampaignId,
+          detectedMonster,
+          activeTabUrl,
+          existingMonster
+        );
+        existingMonster = result.entity;
+        if (result.action === 'updated') {
           showStatus(syncResult, `Updated "${detectedMonster.name}" in Archivist!`, 'success');
         } else {
-          const created = await client.characters.create({
-            campaign_id: selectedCampaignId,
-            character_name: detectedMonster.name,
-            type: 'NPC',
-            description: monsterStatBlock,
-            image: detectedMonster.imageUrl,
-          });
-          existingMonster = created;
           showStatus(syncResult, `Imported "${detectedMonster.name}" into Archivist!`, 'success');
         }
       } else if (detectedType === 'item' && detectedItem) {

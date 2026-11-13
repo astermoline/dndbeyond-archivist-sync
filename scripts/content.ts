@@ -12,7 +12,6 @@ import {
   fetchCharacterWithCustomizations,
   isEligibleMagicItem,
   formatCharacterStatBlock,
-  formatMonsterStatBlock,
   formatItemDetails,
   mergeStatBlockIntoDescription,
   extractUserNotesFromDescription,
@@ -22,6 +21,10 @@ import {
   syncCharacterJournalEntry,
   listAllCampaignItems,
   syncCharacterMagicItems,
+  getArchivistCompendiumUrl,
+  listAllCampaignCharacters,
+  findMatchingCharacterOrCreature,
+  syncMonsterToArchivist,
 } from "../src/utils/sync-helpers";
 
 (() => {
@@ -644,20 +647,15 @@ import {
         // Search across all campaigns in parallel
         const results = await Promise.all(
           cachedCampaigns.map((c) =>
-            client.characters
-              .list({ campaign_id: c.id, size: 100 })
-              .then((res) => ({ campaign: c, characters: (res.data || []) as Character[] }))
+            listAllCampaignCharacters(client, c.id)
+              .then((characters) => ({ campaign: c, characters }))
               .catch(() => ({ campaign: c, characters: [] as Character[] }))
           )
         );
 
         let match: { campaign: Campaign; entity: Character } | null = null;
         for (const res of results) {
-          const found = res.characters.find(
-            (c) =>
-              c.character_name.toLowerCase() === char.name.toLowerCase() ||
-              c.character_aliases?.some((a) => a.toLowerCase() === char.name.toLowerCase())
-          );
+          const found = findMatchingCharacterOrCreature(res.characters, char.name);
           if (found) {
             match = { campaign: res.campaign, entity: found };
             break;
@@ -682,20 +680,15 @@ import {
 
         const results = await Promise.all(
           cachedCampaigns.map((c) =>
-            client.characters
-              .list({ campaign_id: c.id, size: 100 })
-              .then((res) => ({ campaign: c, characters: (res.data || []) as Character[] }))
+            listAllCampaignCharacters(client, c.id)
+              .then((characters) => ({ campaign: c, characters }))
               .catch(() => ({ campaign: c, characters: [] as Character[] }))
           )
         );
 
         let match: { campaign: Campaign; entity: Character } | null = null;
         for (const res of results) {
-          const found = res.characters.find(
-            (c) =>
-              c.character_name.toLowerCase() === monsterName.toLowerCase() ||
-              c.character_aliases?.some((a) => a.toLowerCase() === monsterName.toLowerCase())
-          );
+          const found = findMatchingCharacterOrCreature(res.characters, monsterName);
           if (found) {
             match = { campaign: res.campaign, entity: found };
             break;
@@ -759,10 +752,10 @@ import {
 
     if (isMatched && matchedEntity) {
       const camp = matchedEntity.campaign;
-      const isItem = matchedEntity.isItem;
-      const archivistUrl = isItem
-        ? `https://app.myarchivist.ai/compendium/items/${matchedEntity.entity.id}?section=items`
-        : `https://app.myarchivist.ai/compendium/characters/${matchedEntity.entity.id}?section=characters`;
+      const archivistUrl = getArchivistCompendiumUrl(
+        matchedEntity.entity,
+        matchedEntity.isItem
+      );
 
       if (dockLink) {
         dockLink.href = archivistUrl;
@@ -972,17 +965,8 @@ import {
         showToast("🔮 Fetching character details from D&D Beyond...", "info");
         const char = await fetchCharacterWithCustomizations(charId);
 
-        const { data: charList } = (await client.characters.list({
-          campaign_id: targetCampaignId,
-          size: 100,
-          with_links: true,
-        })) as { data: Character[] };
-
-        const existing = charList.find(
-          (c) =>
-            c.character_name.toLowerCase() === char.name.toLowerCase() ||
-            c.character_aliases?.some((a) => a.toLowerCase() === char.name.toLowerCase())
-        );
+        const charList = await listAllCampaignCharacters(client, targetCampaignId);
+        const existing = findMatchingCharacterOrCreature(charList, char.name);
 
         const statBlock = formatCharacterStatBlock(char, url);
 
@@ -1077,46 +1061,16 @@ import {
           monster = parseMonsterDom(document);
         }
 
-        const { data: charList } = (await client.characters.list({
-          campaign_id: targetCampaignId,
-          size: 100,
-          with_links: true,
-        })) as { data: Character[] };
-
-        const existing = charList.find(
-          (c) =>
-            c.character_name.toLowerCase() === monster.name.toLowerCase() ||
-            c.character_aliases?.some((a) => a.toLowerCase() === monster.name.toLowerCase())
+        const result = await syncMonsterToArchivist(
+          client,
+          targetCampaignId,
+          monster,
+          url
         );
-
-        const statBlock = formatMonsterStatBlock(monster, url);
-
-        if (existing) {
-          const fresh = await client.characters.get(existing.id, { with_links: true });
-          const mergedDesc = mergeStatBlockIntoDescription(
-            fresh.description || "",
-            statBlock,
-            "### Stat Block"
-          );
-          const updatePayload: any = {
-            character_name: monster.name,
-            description: mergedDesc,
-          };
-          if ((!existing.image || isLowResThumbnail(existing.image)) && monster.imageUrl) {
-            updatePayload.image = monster.imageUrl;
-          }
-          await client.characters.update(existing.id, updatePayload);
-          matchedEntity = { campaign: targetCampaign, entity: existing };
+        matchedEntity = { campaign: targetCampaign, entity: result.entity };
+        if (result.action === "updated") {
           showToast(`✅ Synced "${monster.name}" to ${targetCampaign.title}!`, "success");
         } else {
-          const created = await client.characters.create({
-            campaign_id: targetCampaignId,
-            character_name: monster.name,
-            type: "NPC",
-            description: statBlock,
-            image: monster.imageUrl,
-          });
-          matchedEntity = { campaign: targetCampaign, entity: created };
           showToast(`✅ Imported "${monster.name}" into ${targetCampaign.title}!`, "success");
         }
 
