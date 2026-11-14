@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Archives Beyond",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Synchronize D&D Beyond characters, monsters, and items directly into your Archivist campaigns.",
   "permissions": [
     "storage",
@@ -20,6 +20,7 @@
       "matches": [
         "https://www.dndbeyond.com/characters/*",
         "https://www.dndbeyond.com/monsters/*",
+        "https://www.dndbeyond.com/species/*",
         "https://www.dndbeyond.com/magic-items/*",
         "https://www.dndbeyond.com/equipment/*"
       ],

@@ -28,6 +28,9 @@ import {
   listAllCampaignCharacters,
   findMatchingCharacterOrCreature,
   syncMonsterToArchivist,
+  type SpeciesData,
+  parseSpeciesDom,
+  syncSpeciesToArchivist,
 } from '../src/utils/sync-helpers';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -61,13 +64,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   let activeTabUrl = '';
   let campaigns: Campaign[] = [];
   let selectedCampaignId = '';
-  let detectedType: 'character' | 'monster' | 'item' | null = null;
+  let detectedType: 'character' | 'monster' | 'item' | 'species' | null = null;
   let detectedChar: CharacterData | null = null;
   let detectedMonster: MonsterData | null = null;
   let detectedItem: ItemData | null = null;
+  let detectedSpecies: SpeciesData | null = null;
   let existingCharacter: Character | null = null;
   let existingMonster: Character | null = null;
   let existingItem: Item | null = null;
+  let existingSpecies: Character | null = null;
 
   // 1. Load saved settings from chrome.storage
   const stored = await chrome.storage.sync.get(['archivistApiKey', 'selectedCampaignId']);
@@ -175,81 +180,96 @@ document.addEventListener('DOMContentLoaded', async () => {
     await checkExistingEntityInCampaign();
   });
 
-  function getDndBeyondEntity(rawUrl: string): { type: 'character' | 'monster' | 'item'; idOrSlug: string } | null {
-    try {
-      const parsed = new URL(rawUrl);
-      if (!parsed.hostname.includes('dndbeyond.com')) return null;
-      const segments = parsed.pathname.split('/').filter(Boolean);
-      if (segments.length < 2) return null;
-      const section = segments[0].toLowerCase();
-      const subpath = segments[1];
-      if (section === 'characters') {
-        if (/^\d+$/.test(subpath)) return { type: 'character', idOrSlug: subpath };
-        return null;
-      }
-      if (section === 'monsters') {
-        if (subpath) return { type: 'monster', idOrSlug: subpath };
-        return null;
-      }
-      if (section === 'magic-items' || section === 'equipment') {
-        if (subpath) return { type: 'item', idOrSlug: subpath };
-        return null;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  // 5. Inspect Active Tab on D&D Beyond
-  async function inspectCurrentTab() {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || !tab.url) {
-        setEntityState('error', 'Not a valid tab', 'Open D&D Beyond to sync');
-        return;
-      }
-
-      activeTabUrl = tab.url;
-      const entity = getDndBeyondEntity(activeTabUrl);
-      if (!entity) {
-        detectedType = null;
-        setEntityState('error', 'Page Not Supported', 'Navigate to a Character, Monster, or Item');
-        entityMeta.textContent = 'Open an individual D&D Beyond character sheet, monster stat block, or item page to sync.';
-        syncBtn.disabled = true;
-        openArchivistLink.classList.add('hidden');
-        updateBackstoryBtn.classList.add('hidden');
-        return;
-      }
-
-      if (entity.type === 'character') {
-        const charId = extractCharacterId(entity.idOrSlug) || parseInt(entity.idOrSlug, 10);
-        detectedType = 'character';
-        setEntityState('ready', 'Character Detected', 'Loading character info...');
-        syncBtn.disabled = true;
-
-        try {
-          detectedChar = await fetchCharacterWithCustomizations(charId);
-          setEntityState('ready', 'Character Detected', detectedChar.name);
-          entityMeta.textContent = `Level ${detectedChar.totalLevel} ${detectedChar.species} ${detectedChar.classLine}`;
-          itemImportOptions.classList.remove('hidden');
-          await checkExistingEntityInCampaign();
-        } catch (err: any) {
-          setEntityState('error', 'Failed to fetch character', err.message);
+    function getDndBeyondEntity(
+      rawUrl: string
+    ): { type: 'character' | 'monster' | 'item' | 'species'; idOrSlug: string } | null {
+      try {
+        const parsed = new URL(rawUrl);
+        if (!parsed.hostname.includes('dndbeyond.com')) return null;
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if (segments.length < 2) return null;
+        const section = segments[0].toLowerCase();
+        const subpath = segments[1];
+        if (section === 'characters') {
+          if (/^\d+$/.test(subpath)) return { type: 'character', idOrSlug: subpath };
+          return null;
         }
-      } else if (activeTabUrl.includes('/monsters/')) {
-        const monsterId = extractMonsterId(activeTabUrl);
-        detectedType = 'monster';
-        setEntityState('ready', 'Monster Detected', 'Loading monster stat block...');
-        syncBtn.disabled = true;
-        itemImportOptions.classList.add('hidden');
+        if (section === 'monsters') {
+          if (subpath) return { type: 'monster', idOrSlug: subpath };
+          return null;
+        }
+        if (section === 'species') {
+          if (subpath) return { type: 'species', idOrSlug: subpath };
+          return null;
+        }
+        if (section === 'magic-items' || section === 'equipment') {
+          if (subpath) return { type: 'item', idOrSlug: subpath };
+          return null;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
 
-        try {
-          if (monsterId) {
-            try {
-              detectedMonster = await fetchMonsterById(monsterId);
-            } catch {
-              // DOM fallback
+    // 5. Inspect Active Tab on D&D Beyond
+    async function inspectCurrentTab() {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.url) {
+          setEntityState('error', 'Not a valid tab', 'Open D&D Beyond to sync');
+          return;
+        }
+
+        activeTabUrl = tab.url;
+        const entity = getDndBeyondEntity(activeTabUrl);
+        if (!entity) {
+          detectedType = null;
+          setEntityState('error', 'Page Not Supported', 'Navigate to a Character, Monster, or Item');
+          entityMeta.textContent = 'Open an individual D&D Beyond character sheet, monster stat block, or item page to sync.';
+          syncBtn.disabled = true;
+          openArchivistLink.classList.add('hidden');
+          updateBackstoryBtn.classList.add('hidden');
+          return;
+        }
+
+        if (entity.type === 'character') {
+          const charId = extractCharacterId(entity.idOrSlug) || parseInt(entity.idOrSlug, 10);
+          detectedType = 'character';
+          setEntityState('ready', 'Character Detected', 'Loading character info...');
+          syncBtn.disabled = true;
+
+          try {
+            detectedChar = await fetchCharacterWithCustomizations(charId);
+            setEntityState('ready', 'Character Detected', detectedChar.name);
+            entityMeta.textContent = `Level ${detectedChar.totalLevel} ${detectedChar.species} ${detectedChar.classLine}`;
+            itemImportOptions.classList.remove('hidden');
+            await checkExistingEntityInCampaign();
+          } catch (err: any) {
+            setEntityState('error', 'Failed to fetch character', err.message);
+          }
+        } else if (activeTabUrl.includes('/monsters/')) {
+          const monsterId = extractMonsterId(activeTabUrl);
+          detectedType = 'monster';
+          setEntityState('ready', 'Monster Detected', 'Loading monster stat block...');
+          syncBtn.disabled = true;
+          itemImportOptions.classList.add('hidden');
+
+          try {
+            if (monsterId) {
+              try {
+                detectedMonster = await fetchMonsterById(monsterId);
+              } catch {
+                // DOM fallback
+                const [res] = await chrome.scripting.executeScript({
+                  target: { tabId: tab.id! },
+                  func: () => document.body.innerHTML,
+                });
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(res.result, 'text/html');
+                detectedMonster = parseMonsterDom(doc);
+              }
+            } else {
               const [res] = await chrome.scripting.executeScript({
                 target: { tabId: tab.id! },
                 func: () => document.body.innerHTML,
@@ -258,30 +278,48 @@ document.addEventListener('DOMContentLoaded', async () => {
               const doc = parser.parseFromString(res.result, 'text/html');
               detectedMonster = parseMonsterDom(doc);
             }
-          } else {
-            const [res] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id! },
-              func: () => document.body.innerHTML,
-            });
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(res.result, 'text/html');
-            detectedMonster = parseMonsterDom(doc);
+
+            setEntityState('ready', 'Monster Detected', detectedMonster.name);
+            entityMeta.textContent = `CR ${detectedMonster.cr} ${detectedMonster.size} ${detectedMonster.type}`;
+            await checkExistingEntityInCampaign();
+          } catch (err: any) {
+            setEntityState('error', 'Failed to fetch monster', err.message);
           }
+        } else if (activeTabUrl.includes('/magic-items/') || activeTabUrl.includes('/equipment/')) {
+          const itemId = extractItemId(activeTabUrl);
+          detectedType = 'item';
+          setEntityState('ready', 'Item Detected', 'Loading item info...');
+          syncBtn.disabled = true;
+          itemImportOptions.classList.add('hidden');
 
-          setEntityState('ready', 'Monster Detected', detectedMonster.name);
-          entityMeta.textContent = `CR ${detectedMonster.cr} ${detectedMonster.size} ${detectedMonster.type}`;
-          await checkExistingEntityInCampaign();
-        } catch (err: any) {
-          setEntityState('error', 'Failed to fetch monster', err.message);
-        }
-      } else if (activeTabUrl.includes('/magic-items/') || activeTabUrl.includes('/equipment/')) {
-        const itemId = extractItemId(activeTabUrl);
-        detectedType = 'item';
-        setEntityState('ready', 'Item Detected', 'Loading item info...');
-        syncBtn.disabled = true;
-        itemImportOptions.classList.add('hidden');
+          try {
+            try {
+              const [res] = await chrome.scripting.executeScript({
+                target: { tabId: tab.id! },
+                func: () => document.body.innerHTML,
+              });
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(res.result, 'text/html');
+              detectedItem = parseItemDom(doc);
+            } catch {
+              if (itemId) {
+                detectedItem = await fetchItemTooltipJson(itemId, { isMagicItem: activeTabUrl.includes('magic-items') });
+              } else {
+                throw new Error('Unable to parse item from page.');
+              }
+            }
+            setEntityState('ready', 'Item Detected', detectedItem.name);
+            entityMeta.textContent = `${detectedItem.type}${detectedItem.rarity ? `, ${detectedItem.rarity}` : ''}`;
+            await checkExistingEntityInCampaign();
+          } catch (err: any) {
+            setEntityState('error', 'Failed to fetch item', err.message);
+          }
+        } else if (entity.type === 'species') {
+          detectedType = 'species';
+          setEntityState('ready', 'Species Detected', 'Loading species traits...');
+          syncBtn.disabled = true;
+          itemImportOptions.classList.add('hidden');
 
-        try {
           try {
             const [res] = await chrome.scripting.executeScript({
               target: { tabId: tab.id! },
@@ -289,319 +327,352 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
             const parser = new DOMParser();
             const doc = parser.parseFromString(res.result, 'text/html');
-            detectedItem = parseItemDom(doc);
-          } catch {
-            if (itemId) {
-              detectedItem = await fetchItemTooltipJson(itemId, { isMagicItem: activeTabUrl.includes('magic-items') });
-            } else {
-              throw new Error('Unable to parse item from page.');
-            }
+            detectedSpecies = parseSpeciesDom(doc);
+
+            setEntityState('ready', 'Species Detected', detectedSpecies.name);
+            entityMeta.textContent = 'Species Traits (Creature Compendium)';
+            await checkExistingEntityInCampaign();
+          } catch (err: any) {
+            setEntityState('error', 'Failed to parse species', err.message);
           }
-          setEntityState('ready', 'Item Detected', detectedItem.name);
-          entityMeta.textContent = `${detectedItem.type}${detectedItem.rarity ? `, ${detectedItem.rarity}` : ''}`;
-          await checkExistingEntityInCampaign();
-        } catch (err: any) {
-          setEntityState('error', 'Failed to fetch item', err.message);
-        }
-      } else {
-        detectedType = null;
-        setEntityState('error', 'Page Not Supported', 'Navigate to a Character, Monster, or Item');
-        entityMeta.textContent = 'Open a D&D Beyond character sheet, monster stat block, or item page to sync.';
-        syncBtn.disabled = true;
-        openArchivistLink.classList.add('hidden');
-        updateBackstoryBtn.classList.add('hidden');
-      }
-    } catch (err: any) {
-      setEntityState('error', 'Inspection Error', err.message);
-    }
-  }
-
-  // 6. Check if entity already exists in Archivist campaign
-  async function checkExistingEntityInCampaign() {
-    if (!client || !selectedCampaignId) return;
-
-    if (detectedType === 'character' && detectedChar) {
-      try {
-        const charList = await listAllCampaignCharacters(client, selectedCampaignId);
-        existingCharacter = findMatchingCharacterOrCreature(charList, detectedChar.name);
-
-        if (existingCharacter) {
-          statusDot.className = 'status-dot matched';
-          entityStatusLabel.textContent = 'Matched in Campaign';
-          syncBtnText.textContent = 'Sync / Update Character';
-          openArchivistLink.href = getArchivistCompendiumUrl(existingCharacter);
-          openArchivistLink.classList.remove('hidden');
-          updateBackstoryBtn.classList.remove('hidden');
         } else {
-          statusDot.className = 'status-dot ready';
-          entityStatusLabel.textContent = 'New Character (Ready to Import)';
-          syncBtnText.textContent = 'Import Character to Archivist';
+          detectedType = null;
+          setEntityState('error', 'Page Not Supported', 'Navigate to a Character, Monster, Species, or Item');
+          entityMeta.textContent = 'Open a D&D Beyond character sheet, monster stat block, species, or item page to sync.';
+          syncBtn.disabled = true;
           openArchivistLink.classList.add('hidden');
           updateBackstoryBtn.classList.add('hidden');
         }
-        syncBtn.disabled = false;
-        syncBtn.classList.remove('disabled');
-      } catch (err) {
-        console.error('Error listing campaign characters:', err);
-      }
-    } else if (detectedType === 'monster' && detectedMonster) {
-      try {
-        const charList = await listAllCampaignCharacters(client, selectedCampaignId);
-        existingMonster = findMatchingCharacterOrCreature(charList, detectedMonster.name);
-
-        if (existingMonster) {
-          statusDot.className = 'status-dot matched';
-          entityStatusLabel.textContent = isCreatureEntity(existingMonster)
-            ? 'Creature Matched in Campaign'
-            : 'Monster Matched in Characters';
-          syncBtnText.textContent = 'Sync / Update Monster';
-          openArchivistLink.href = getArchivistCompendiumUrl(existingMonster);
-          openArchivistLink.classList.remove('hidden');
-        } else {
-          statusDot.className = 'status-dot ready';
-          entityStatusLabel.textContent = 'New Creature (Ready to Import)';
-          syncBtnText.textContent = 'Import Creature to Archivist';
-          openArchivistLink.classList.add('hidden');
-        }
-        updateBackstoryBtn.classList.add('hidden');
-        syncBtn.disabled = false;
-        syncBtn.classList.remove('disabled');
-      } catch (err) {
-        console.error('Error listing campaign characters for monster match:', err);
-      }
-    } else if (detectedType === 'item' && detectedItem) {
-      try {
-        const { data: itemList } = (await client.items.list({
-          campaign_id: selectedCampaignId,
-          size: 100,
-          with_links: true,
-        })) as { data: Item[] };
-
-        existingItem =
-          itemList.find(
-            (i) =>
-              i.name.toLowerCase() === detectedItem!.name.toLowerCase() ||
-              i.aliases?.some((a) => a.toLowerCase() === detectedItem!.name.toLowerCase())
-          ) || null;
-
-        if (existingItem) {
-          statusDot.className = 'status-dot matched';
-          entityStatusLabel.textContent = 'Item Matched in Campaign';
-          syncBtnText.textContent = 'Update Item in Archivist';
-          openArchivistLink.href = `https://app.myarchivist.ai/compendium/items/${existingItem.id}?section=items`;
-          openArchivistLink.classList.remove('hidden');
-        } else {
-          statusDot.className = 'status-dot ready';
-          entityStatusLabel.textContent = 'New Item (Ready to Import)';
-          syncBtnText.textContent = 'Import Item to Archivist';
-          openArchivistLink.classList.add('hidden');
-        }
-        updateBackstoryBtn.classList.add('hidden');
-        syncBtn.disabled = false;
-        syncBtn.classList.remove('disabled');
-      } catch (err) {
-        console.error('Error listing campaign items:', err);
+      } catch (err: any) {
+        setEntityState('error', 'Inspection Error', err.message);
       }
     }
-  }
 
-  function setEntityState(dotState: 'ready' | 'matched' | 'error', label: string, name: string) {
-    statusDot.className = `status-dot ${dotState}`;
-    entityStatusLabel.textContent = label;
-    entityName.textContent = name;
-  }
+    // 6. Check if entity already exists in Archivist campaign
+    async function checkExistingEntityInCampaign() {
+      if (!client || !selectedCampaignId) return;
 
-  // 7. Perform Sync / Import Action
-  syncBtn.addEventListener('click', async () => {
-    if (!client || !selectedCampaignId) return;
-
-    syncBtn.disabled = true;
-    syncSpinner.style.display = 'inline-block';
-    hideStatus(syncResult);
-
-    try {
       if (detectedType === 'character' && detectedChar) {
-        const statBlockSection = formatCharacterStatBlock(detectedChar, activeTabUrl);
-
-        if (existingCharacter) {
-          existingCharacter = await client.characters.get(existingCharacter.id, { with_links: true });
-          const mergedDescription = mergeStatBlockIntoDescription(
-            existingCharacter.description || '',
-            statBlockSection,
-            '### Stat Block'
-          );
-
-          const updateCharPayload: any = {
-            character_name: detectedChar.name,
-            description: mergedDescription,
-            backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
-          };
-          if ((!existingCharacter.image || isLowResThumbnail(existingCharacter.image)) && detectedChar.avatarUrl) {
-            updateCharPayload.image = detectedChar.avatarUrl;
-          }
-          await client.characters.update(existingCharacter.id, updateCharPayload);
-          showStatus(syncResult, `Updated "${detectedChar.name}" in Archivist!`, 'success');
-        } else {
-          const created = await client.characters.create({
-            campaign_id: selectedCampaignId,
-            character_name: detectedChar.name,
-            type: 'PC',
-            description: statBlockSection,
-            backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
-            image: detectedChar.avatarUrl,
-          });
-          existingCharacter = created;
-          showStatus(syncResult, `Imported "${detectedChar.name}" into Archivist!`, 'success');
-        }
-
-        let campaignItems: Item[] = [];
         try {
-          campaignItems = await listAllCampaignItems(client, selectedCampaignId);
-        } catch (itemsErr) {
-          console.warn('[Archives Beyond Popup] Failed to list campaign items:', itemsErr);
-        }
+          const charList = await listAllCampaignCharacters(client, selectedCampaignId);
+          existingCharacter = findMatchingCharacterOrCreature(charList, detectedChar.name);
 
-        // Optional: Import equipped magic items (Uncommon or higher only) first so newly created items get linked in the journal
-        if (syncInventoryItems.checked && detectedChar.inventory.length > 0) {
-          campaignItems = await syncCharacterMagicItems(
-            client,
-            selectedCampaignId,
-            detectedChar,
-            activeTabUrl,
-            campaignItems
-          );
-        }
-
-        // Full Markdown Character Sheet Journal Sync:
-        try {
-          if (selectedCampaignId) {
-            const folderId = await findOrCreateJournalFolder(
-              client,
-              selectedCampaignId,
-              'Character Sheets'
-            );
-            const journalMarkdown = formatCharacterJournalMarkdown(detectedChar, campaignItems);
-            await syncCharacterJournalEntry(
-              client,
-              selectedCampaignId,
-              folderId,
-              detectedChar.name,
-              journalMarkdown
-            );
-            console.log('[Archives Beyond Popup] Character Sheet journal synced to folder:', folderId);
+          if (existingCharacter) {
+            statusDot.className = 'status-dot matched';
+            entityStatusLabel.textContent = 'Matched in Campaign';
+            syncBtnText.textContent = 'Sync / Update Character';
+            openArchivistLink.href = getArchivistCompendiumUrl(existingCharacter);
+            openArchivistLink.classList.remove('hidden');
+            updateBackstoryBtn.classList.remove('hidden');
+          } else {
+            statusDot.className = 'status-dot ready';
+            entityStatusLabel.textContent = 'New Character (Ready to Import)';
+            syncBtnText.textContent = 'Import Character to Archivist';
+            openArchivistLink.classList.add('hidden');
+            updateBackstoryBtn.classList.add('hidden');
           }
-        } catch (journalErr) {
-          console.error('[Archives Beyond Popup] Failed to sync journal entry:', journalErr);
+          syncBtn.disabled = false;
+          syncBtn.classList.remove('disabled');
+        } catch (err) {
+          console.error('Error listing campaign characters:', err);
         }
       } else if (detectedType === 'monster' && detectedMonster) {
-        const result = await syncMonsterToArchivist(
-          client,
-          selectedCampaignId,
-          detectedMonster,
-          activeTabUrl,
-          existingMonster
-        );
-        existingMonster = result.entity;
-        if (result.action === 'updated') {
-          showStatus(syncResult, `Updated "${detectedMonster.name}" in Archivist!`, 'success');
-        } else {
-          showStatus(syncResult, `Imported "${detectedMonster.name}" into Archivist!`, 'success');
+        try {
+          const charList = await listAllCampaignCharacters(client, selectedCampaignId);
+          existingMonster = findMatchingCharacterOrCreature(charList, detectedMonster.name);
+
+          if (existingMonster) {
+            statusDot.className = 'status-dot matched';
+            entityStatusLabel.textContent = isCreatureEntity(existingMonster)
+              ? 'Creature Matched in Campaign'
+              : 'Monster Matched in Characters';
+            syncBtnText.textContent = 'Sync / Update Monster';
+            openArchivistLink.href = getArchivistCompendiumUrl(existingMonster);
+            openArchivistLink.classList.remove('hidden');
+          } else {
+            statusDot.className = 'status-dot ready';
+            entityStatusLabel.textContent = 'New Creature (Ready to Import)';
+            syncBtnText.textContent = 'Import Creature to Archivist';
+            openArchivistLink.classList.add('hidden');
+          }
+          updateBackstoryBtn.classList.add('hidden');
+          syncBtn.disabled = false;
+          syncBtn.classList.remove('disabled');
+        } catch (err) {
+          console.error('Error listing campaign characters for monster match:', err);
+        }
+      } else if (detectedType === 'species' && detectedSpecies) {
+        try {
+          const charList = await listAllCampaignCharacters(client, selectedCampaignId);
+          existingSpecies = findMatchingCharacterOrCreature(charList, detectedSpecies.name);
+
+          if (existingSpecies) {
+            statusDot.className = 'status-dot matched';
+            entityStatusLabel.textContent = isCreatureEntity(existingSpecies)
+              ? 'Creature Matched in Campaign'
+              : 'Species Matched in Characters';
+            syncBtnText.textContent = 'Sync / Update Species';
+            openArchivistLink.href = getArchivistCompendiumUrl(existingSpecies);
+            openArchivistLink.classList.remove('hidden');
+          } else {
+            statusDot.className = 'status-dot ready';
+            entityStatusLabel.textContent = 'New Creature (Ready to Import)';
+            syncBtnText.textContent = 'Import Species to Archivist';
+            openArchivistLink.classList.add('hidden');
+          }
+          updateBackstoryBtn.classList.add('hidden');
+          syncBtn.disabled = false;
+          syncBtn.classList.remove('disabled');
+        } catch (err) {
+          console.error('Error listing campaign characters for species match:', err);
         }
       } else if (detectedType === 'item' && detectedItem) {
-        const itemDetailsSection = formatItemDetails(detectedItem, activeTabUrl);
-
-        if (existingItem) {
-          existingItem = await client.items.get(existingItem.id, { with_links: true });
-          const mergedDescription = mergeStatBlockIntoDescription(
-            existingItem.description || '',
-            itemDetailsSection,
-            '### Item Details'
-          );
-
-          const updateItemPayload: any = {
-            name: detectedItem.name,
-            type: detectedItem.type,
-            description: mergedDescription,
-          };
-          if ((!existingItem.image || isLowResThumbnail(existingItem.image)) && detectedItem.image) {
-            updateItemPayload.image = detectedItem.image;
-          }
-          await client.items.update(existingItem.id, updateItemPayload);
-          showStatus(syncResult, `Updated "${detectedItem.name}" in Archivist!`, 'success');
-        } else {
-          const created = await client.items.create({
+        try {
+          const { data: itemList } = (await client.items.list({
             campaign_id: selectedCampaignId,
-            name: detectedItem.name,
-            type: detectedItem.type,
-            description: itemDetailsSection,
-            image: detectedItem.image,
-          });
-          existingItem = created;
-          showStatus(syncResult, `Imported "${detectedItem.name}" into Archivist!`, 'success');
+            size: 100,
+            with_links: true,
+          })) as { data: Item[] };
+
+          existingItem =
+            itemList.find(
+              (i) =>
+                i.name.toLowerCase() === detectedItem!.name.toLowerCase() ||
+                i.aliases?.some((a) => a.toLowerCase() === detectedItem!.name.toLowerCase())
+            ) || null;
+
+          if (existingItem) {
+            statusDot.className = 'status-dot matched';
+            entityStatusLabel.textContent = 'Item Matched in Campaign';
+            syncBtnText.textContent = 'Update Item in Archivist';
+            openArchivistLink.href = `https://app.myarchivist.ai/compendium/items/${existingItem.id}?section=items`;
+            openArchivistLink.classList.remove('hidden');
+          } else {
+            statusDot.className = 'status-dot ready';
+            entityStatusLabel.textContent = 'New Item (Ready to Import)';
+            syncBtnText.textContent = 'Import Item to Archivist';
+            openArchivistLink.classList.add('hidden');
+          }
+          updateBackstoryBtn.classList.add('hidden');
+          syncBtn.disabled = false;
+          syncBtn.classList.remove('disabled');
+        } catch (err) {
+          console.error('Error listing campaign items:', err);
         }
       }
-
-      await checkExistingEntityInCampaign();
-    } catch (err: any) {
-      console.error('Sync failed:', err);
-      showStatus(syncResult, `Sync failed: ${err.message}`, 'error');
-    } finally {
-      syncBtn.disabled = false;
-      syncSpinner.style.display = 'none';
-    }
-  });
-
-  // 8. Update D&D Beyond Backstory from Archivist (stripping ### Stat Block)
-  updateBackstoryBtn.addEventListener('click', async () => {
-    if (!existingCharacter) return;
-
-    // Extract user notes, excluding ### Stat Block and the divider URL
-    let backstory = extractUserNotesFromDescription(existingCharacter.description || '', '### Stat Block');
-    if (!backstory) {
-      backstory = existingCharacter.backstory || '';
     }
 
-    if (!backstory) {
-      showStatus(syncResult, 'No custom notes/backstory found in Archivist for this character.', 'error');
-      return;
+    function setEntityState(dotState: 'ready' | 'matched' | 'error', label: string, name: string) {
+      statusDot.className = `status-dot ${dotState}`;
+      entityStatusLabel.textContent = label;
+      entityName.textContent = name;
     }
 
-    updateBackstoryBtn.disabled = true;
-    updateBackstorySpinner.style.display = 'inline-block';
-    hideStatus(syncResult);
+    // 7. Perform Sync / Import Action
+    syncBtn.addEventListener('click', async () => {
+      if (!client || !selectedCampaignId) return;
 
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('No active D&D Beyond tab found.');
+      syncBtn.disabled = true;
+      syncSpinner.style.display = 'inline-block';
+      hideStatus(syncResult);
 
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        action: 'UPDATE_BACKSTORY',
-        backstory,
-      });
+      try {
+        if (detectedType === 'character' && detectedChar) {
+          const statBlockSection = formatCharacterStatBlock(detectedChar, activeTabUrl);
 
-      if (response?.success) {
-        showStatus(syncResult, response.message || '✨ Backstory updated on D&D Beyond!', 'success');
-      } else {
-        showStatus(syncResult, response?.message || '📋 Backstory copied to clipboard! (Open Notes tab to paste)', 'success');
+          if (existingCharacter) {
+            existingCharacter = await client.characters.get(existingCharacter.id, { with_links: true });
+            const mergedDescription = mergeStatBlockIntoDescription(
+              existingCharacter.description || '',
+              statBlockSection,
+              '### Stat Block'
+            );
+
+            const updateCharPayload: any = {
+              character_name: detectedChar.name,
+              description: mergedDescription,
+              backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
+            };
+            if ((!existingCharacter.image || isLowResThumbnail(existingCharacter.image)) && detectedChar.avatarUrl) {
+              updateCharPayload.image = detectedChar.avatarUrl;
+            }
+            await client.characters.update(existingCharacter.id, updateCharPayload);
+            showStatus(syncResult, `Updated "${detectedChar.name}" in Archivist!`, 'success');
+          } else {
+            const created = await client.characters.create({
+              campaign_id: selectedCampaignId,
+              character_name: detectedChar.name,
+              type: 'PC',
+              description: statBlockSection,
+              backstory: detectedChar.bio.backstory || detectedChar.bio.appearance,
+              image: detectedChar.avatarUrl,
+            });
+            existingCharacter = created;
+            showStatus(syncResult, `Imported "${detectedChar.name}" into Archivist!`, 'success');
+          }
+
+          let campaignItems: Item[] = [];
+          try {
+            campaignItems = await listAllCampaignItems(client, selectedCampaignId);
+          } catch (itemsErr) {
+            console.warn('[Archives Beyond Popup] Failed to list campaign items:', itemsErr);
+          }
+
+          // Optional: Import equipped magic items (Uncommon or higher only) first so newly created items get linked in the journal
+          if (syncInventoryItems.checked && detectedChar.inventory.length > 0) {
+            campaignItems = await syncCharacterMagicItems(
+              client,
+              selectedCampaignId,
+              detectedChar,
+              activeTabUrl,
+              campaignItems
+            );
+          }
+
+          // Full Markdown Character Sheet Journal Sync:
+          try {
+            if (selectedCampaignId) {
+              const folderId = await findOrCreateJournalFolder(
+                client,
+                selectedCampaignId,
+                'Character Sheets'
+              );
+              const journalMarkdown = formatCharacterJournalMarkdown(detectedChar, campaignItems);
+              await syncCharacterJournalEntry(
+                client,
+                selectedCampaignId,
+                folderId,
+                detectedChar.name,
+                journalMarkdown
+              );
+              console.log('[Archives Beyond Popup] Character Sheet journal synced to folder:', folderId);
+            }
+          } catch (journalErr) {
+            console.error('[Archives Beyond Popup] Failed to sync journal entry:', journalErr);
+          }
+        } else if (detectedType === 'monster' && detectedMonster) {
+          const result = await syncMonsterToArchivist(
+            client,
+            selectedCampaignId,
+            detectedMonster,
+            activeTabUrl,
+            existingMonster
+          );
+          existingMonster = result.entity;
+          if (result.action === 'updated') {
+            showStatus(syncResult, `Updated "${detectedMonster.name}" in Archivist!`, 'success');
+          } else {
+            showStatus(syncResult, `Imported "${detectedMonster.name}" into Archivist!`, 'success');
+          }
+        } else if (detectedType === 'species' && detectedSpecies) {
+          const result = await syncSpeciesToArchivist(
+            client,
+            selectedCampaignId,
+            detectedSpecies,
+            activeTabUrl,
+            existingSpecies
+          );
+          existingSpecies = result.entity;
+          if (result.action === 'updated') {
+            showStatus(syncResult, `Updated "${detectedSpecies.name}" in Archivist!`, 'success');
+          } else {
+            showStatus(syncResult, `Imported "${detectedSpecies.name}" into Archivist!`, 'success');
+          }
+        } else if (detectedType === 'item' && detectedItem) {
+          const itemDetailsSection = formatItemDetails(detectedItem, activeTabUrl);
+
+          if (existingItem) {
+            existingItem = await client.items.get(existingItem.id, { with_links: true });
+            const mergedDescription = mergeStatBlockIntoDescription(
+              existingItem.description || '',
+              itemDetailsSection,
+              '### Item Details'
+            );
+
+            const updateItemPayload: any = {
+              name: detectedItem.name,
+              type: detectedItem.type,
+              description: mergedDescription,
+            };
+            if ((!existingItem.image || isLowResThumbnail(existingItem.image)) && detectedItem.image) {
+              updateItemPayload.image = detectedItem.image;
+            }
+            await client.items.update(existingItem.id, updateItemPayload);
+            showStatus(syncResult, `Updated "${detectedItem.name}" in Archivist!`, 'success');
+          } else {
+            const created = await client.items.create({
+              campaign_id: selectedCampaignId,
+              name: detectedItem.name,
+              type: detectedItem.type,
+              description: itemDetailsSection,
+              image: detectedItem.image,
+            });
+            existingItem = created;
+            showStatus(syncResult, `Imported "${detectedItem.name}" into Archivist!`, 'success');
+          }
+        }
+
+        await checkExistingEntityInCampaign();
+      } catch (err: any) {
+        console.error('Sync failed:', err);
+        showStatus(syncResult, `Sync failed: ${err.message}`, 'error');
+      } finally {
+        syncBtn.disabled = false;
+        syncSpinner.style.display = 'none';
       }
-    } catch (err: any) {
-      // If message delivery fails, copy directly to clipboard
-      await navigator.clipboard.writeText(backstory).catch(() => {});
-      showStatus(syncResult, '📋 Backstory copied to clipboard! Paste it into the Backstory field on your sheet.', 'success');
-    } finally {
-      updateBackstoryBtn.disabled = false;
-      updateBackstorySpinner.style.display = 'none';
+    });
+
+    // 8. Update D&D Beyond Backstory from Archivist (stripping ### Stat Block)
+    updateBackstoryBtn.addEventListener('click', async () => {
+      if (!existingCharacter) return;
+
+      // Extract user notes, excluding ### Stat Block and the divider URL
+      let backstory = extractUserNotesFromDescription(existingCharacter.description || '', '### Stat Block');
+      if (!backstory) {
+        backstory = existingCharacter.backstory || '';
+      }
+
+      if (!backstory) {
+        showStatus(syncResult, 'No custom notes/backstory found in Archivist for this character.', 'error');
+        return;
+      }
+
+      updateBackstoryBtn.disabled = true;
+      updateBackstorySpinner.style.display = 'inline-block';
+      hideStatus(syncResult);
+
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('No active D&D Beyond tab found.');
+
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          action: 'UPDATE_BACKSTORY',
+          backstory,
+        });
+
+        if (response?.success) {
+          showStatus(syncResult, response.message || '✨ Backstory updated on D&D Beyond!', 'success');
+        } else {
+          showStatus(syncResult, response?.message || '📋 Backstory copied to clipboard! (Open Notes tab to paste)', 'success');
+        }
+      } catch (err: any) {
+        // If message delivery fails, copy directly to clipboard
+        await navigator.clipboard.writeText(backstory).catch(() => { });
+        showStatus(syncResult, '📋 Backstory copied to clipboard! Paste it into the Backstory field on your sheet.', 'success');
+      } finally {
+        updateBackstoryBtn.disabled = false;
+        updateBackstorySpinner.style.display = 'none';
+      }
+    });
+
+    function showStatus(el: HTMLElement, msg: string, type: 'success' | 'error') {
+      el.className = `status-msg ${type}`;
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideStatus(el: HTMLElement) {
+      el.className = 'status-msg hidden';
+      el.textContent = '';
     }
   });
-
-  function showStatus(el: HTMLElement, msg: string, type: 'success' | 'error') {
-    el.className = `status-msg ${type}`;
-    el.textContent = msg;
-    el.classList.remove('hidden');
-  }
-
-  function hideStatus(el: HTMLElement) {
-    el.className = 'status-msg hidden';
-    el.textContent = '';
-  }
-});

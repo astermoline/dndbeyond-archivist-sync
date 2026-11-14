@@ -25,6 +25,8 @@ import {
   listAllCampaignCharacters,
   findMatchingCharacterOrCreature,
   syncMonsterToArchivist,
+  parseSpeciesDom,
+  syncSpeciesToArchivist,
 } from "../src/utils/sync-helpers";
 
 (() => {
@@ -458,7 +460,9 @@ import {
     return dock.querySelector(".bar-content") || dock;
   }
 
-  function getDndBeyondEntity(rawUrl: string = window.location.href): { type: "character" | "monster" | "item"; idOrSlug: string } | null {
+  function getDndBeyondEntity(
+    rawUrl: string = window.location.href
+  ): { type: "character" | "monster" | "item" | "species"; idOrSlug: string } | null {
     try {
       const parsed = new URL(rawUrl);
       if (!parsed.hostname.includes("dndbeyond.com")) return null;
@@ -476,6 +480,11 @@ import {
 
       if (section === "monsters") {
         if (subpath) return { type: "monster", idOrSlug: subpath };
+        return null;
+      }
+
+      if (section === "species") {
+        if (subpath) return { type: "species", idOrSlug: subpath };
         return null;
       }
 
@@ -571,6 +580,10 @@ import {
       targetContainer =
         document.querySelector(".page-heading__content") ||
         document.querySelector(".mon-stat-block__name") ||
+        document.querySelector(".page-heading");
+    } else if (entity.type === "species") {
+      targetContainer =
+        document.querySelector(".page-heading__content") ||
         document.querySelector(".page-heading");
     } else if (entity.type === "item") {
       targetContainer =
@@ -697,6 +710,28 @@ import {
 
         matchedEntity = match;
         updateButtonsUi(monsterName, !!match, "Monster");
+      } else if (url.includes("/species/")) {
+        const species = parseSpeciesDom(document);
+
+        const results = await Promise.all(
+          cachedCampaigns.map((c) =>
+            listAllCampaignCharacters(client, c.id)
+              .then((characters) => ({ campaign: c, characters }))
+              .catch(() => ({ campaign: c, characters: [] as Character[] }))
+          )
+        );
+
+        let match: { campaign: Campaign; entity: Character } | null = null;
+        for (const res of results) {
+          const found = findMatchingCharacterOrCreature(res.characters, species.name);
+          if (found) {
+            match = { campaign: res.campaign, entity: found };
+            break;
+          }
+        }
+
+        matchedEntity = match;
+        updateButtonsUi(species.name, !!match, "Species");
       } else if (url.includes("/magic-items/") || url.includes("/equipment/")) {
         const itemId = extractItemId(url);
         let item;
@@ -897,6 +932,7 @@ import {
       const url = window.location.href;
       const isChar = url.includes("/characters/");
       const isMonster = url.includes("/monsters/");
+      const isSpecies = url.includes("/species/");
       const isItem = url.includes("/magic-items/") || url.includes("/equipment/");
 
       // Ensure campaigns are loaded
@@ -928,6 +964,8 @@ import {
         } else if (isMonster) {
           const monsterId = extractMonsterId(url);
           entityName = monsterId ? (await fetchMonsterById(monsterId).catch(() => parseMonsterDom(document))).name : parseMonsterDom(document).name;
+        } else if (isSpecies) {
+          entityName = parseSpeciesDom(document).name;
         } else if (isItem) {
           entityName = parseItemDom(document).name;
         }
@@ -1075,6 +1113,27 @@ import {
         }
 
         updateButtonsUi(monster.name, true, "Monster");
+        return;
+      }
+
+      // --- Species Traits ---
+      if (isSpecies) {
+        showToast("🔮 Reading species traits...", "info");
+        const species = parseSpeciesDom(document);
+        const result = await syncSpeciesToArchivist(
+          client,
+          targetCampaignId,
+          species,
+          url
+        );
+        matchedEntity = { campaign: targetCampaign, entity: result.entity };
+        if (result.action === "updated") {
+          showToast(`✅ Synced "${species.name}" to ${targetCampaign.title}!`, "success");
+        } else {
+          showToast(`✅ Imported "${species.name}" into ${targetCampaign.title}!`, "success");
+        }
+
+        updateButtonsUi(species.name, true, "Species");
         return;
       }
 

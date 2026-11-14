@@ -245,11 +245,120 @@ export function formatItemDetails(
 [View on D&D Beyond](${ddbUrl})`;
 }
 
+export interface SpeciesData {
+  name: string;
+  traitsMarkdown: string;
+  imageUrl?: string;
+}
+
+/**
+ * Parses a D&D Beyond species page DOM, extracting the species name, image,
+ * and only the Traits block (ignoring surrounding lore/flavor text).
+ */
+export function parseSpeciesDom(doc: Document): SpeciesData {
+  const rawTitle =
+    doc.querySelector('h1.page-title')?.textContent?.trim() ||
+    doc.querySelector('.page-heading h1')?.textContent?.trim() ||
+    doc.title.replace(/\s+Species\s+for\s+Dungeons.*$/i, '').replace(/^The\s+/i, '').trim() ||
+    '';
+  const name = rawTitle.trim();
+  if (!name) {
+    throw new Error('Could not determine species name from page.');
+  }
+
+  const container =
+    doc.querySelector('.static-container-details') ||
+    doc.querySelector('.static-container-race') ||
+    doc.body;
+
+  if (!container) {
+    throw new Error(`Could not find content container for species "${name}".`);
+  }
+
+  const headings = Array.from(container.querySelectorAll('h2, h3'));
+  const traitsHeading =
+    headings.find((h) => h.id && /Traits$/i.test(h.id)) ||
+    headings.find((h) => /\bTraits\s*$/i.test(h.textContent?.trim() || ''));
+
+  if (!traitsHeading) {
+    throw new Error(`Could not find Traits section on species page for "${name}".`);
+  }
+
+  const stopOnH3 = traitsHeading.tagName.toUpperCase() === 'H3';
+  const blocks: string[] = [];
+
+  let node: ChildNode | null = traitsHeading.nextSibling;
+  while (node) {
+    if (node.nodeType === 1) {
+      const el = node as Element;
+      const tag = el.tagName.toUpperCase();
+      if (
+        tag === 'H1' ||
+        tag === 'H2' ||
+        (stopOnH3 && tag === 'H3') ||
+        tag === 'FOOTER' ||
+        el.classList.contains('static-container-footer')
+      ) {
+        break;
+      }
+
+      if (tag === 'H3' || tag === 'H4') {
+        const headingText = el.textContent?.trim();
+        if (headingText) {
+          blocks.push(`#### ${headingText}`);
+        }
+      } else {
+        const md = htmlToMarkdown(el.outerHTML)
+          .replace(/\r\n/g, '\n')
+          .replace(/^[ \t]+/gm, '')
+          .trim();
+        if (md) {
+          blocks.push(md);
+        }
+      }
+    } else if (node.nodeType === 3) {
+      const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) {
+        blocks.push(text);
+      }
+    }
+    node = node.nextSibling;
+  }
+
+  const traitsMarkdown = blocks.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!traitsMarkdown) {
+    throw new Error(`Traits section was empty on species page for "${name}".`);
+  }
+
+  const imgEl = doc.querySelector(
+    '.details-aside img, .image-container img, .static-container-race img'
+  ) as HTMLImageElement | null;
+  const rawImg = imgEl?.getAttribute('src')?.trim() || '';
+  const imageUrl = rawImg && !isLowResThumbnail(rawImg) ? rawImg : undefined;
+
+  return {
+    name,
+    traitsMarkdown,
+    imageUrl,
+  };
+}
+
+export function formatSpeciesTraits(species: SpeciesData, ddbUrl: string): string {
+  return `### Species Traits
+
+${species.traitsMarkdown}
+
+---
+[View on D&D Beyond](${ddbUrl})`;
+}
+
 export type StatBlockHeader =
   | '### Stat Block'
   | '### Item Details'
+  | '### Species Traits'
   | '# Stat Block'
-  | '# Item Details';
+  | '# Item Details'
+  | '# Species Traits';
 
 const DNDBEYOND_DIVIDER_REGEX = /(?:(?:\r?\n)?[ \t]*---+[ \t]*)?(?:\[(?:View on )?D&D Beyond[^\]]*\]\([^\s)]+\)|\[[^\]]*\]\(https?:\/\/(?:www\.)?dndbeyond\.com\/[^\s)]+\)|https?:\/\/(?:www\.)?dndbeyond\.com\/[^\s)]+)(?:[ \t]*\r?\n[ \t]*---+)?/i;
 
@@ -1083,45 +1192,44 @@ export function findMatchingCharacterOrCreature(
 }
 
 /**
- * Syncs a D&D Beyond monster stat block into Archivist.
- * Searches for any existing entry matching the monster's name or aliases across both Creatures and Characters:
- * - If found, updates the existing entry in-place while preserving its current type (e.g. if promoted to an NPC in Characters).
+ * Shared helper to sync a Creature-type compendium entry (monster stat block or species traits)
+ * into Archivist. Searches across both Creatures and Characters:
+ * - If found, updates the existing entry in-place while preserving its current type.
  * - If not found, creates a new entry with `type: 'Creature'` by default.
  */
-export async function syncMonsterToArchivist(
+async function syncCreatureCompendiumEntry(
   client: ArchivistClient,
   campaignId: string,
-  monster: MonsterData,
-  ddbUrl: string,
+  entry: { name: string; imageUrl?: string },
+  formattedSection: string,
+  sectionHeader: StatBlockHeader,
   existingMatch?: Character | null
 ): Promise<{ entity: Character; action: 'created' | 'updated' }> {
-  const statBlock = formatMonsterStatBlock(monster, ddbUrl);
-
   let existing = existingMatch ?? null;
   if (!existing) {
     const charList = await listAllCampaignCharacters(client, campaignId);
-    existing = findMatchingCharacterOrCreature(charList, monster.name);
+    existing = findMatchingCharacterOrCreature(charList, entry.name);
   }
 
   if (existing) {
     const fresh = await client.characters.get(existing.id, { with_links: true });
     const mergedDesc = mergeStatBlockIntoDescription(
       fresh.description || existing.description || '',
-      statBlock,
-      '### Stat Block'
+      formattedSection,
+      sectionHeader
     );
     const preservedName =
       fresh.character_name &&
-      fresh.character_name.trim().toLowerCase() !== monster.name.trim().toLowerCase()
+      fresh.character_name.trim().toLowerCase() !== entry.name.trim().toLowerCase()
         ? fresh.character_name
-        : monster.name;
+        : entry.name;
     const updatePayload: any = {
       character_name: preservedName,
       description: mergedDesc,
     };
     const currentImage = fresh.image ?? existing.image;
-    if ((!currentImage || isLowResThumbnail(currentImage)) && monster.imageUrl) {
-      updatePayload.image = monster.imageUrl;
+    if ((!currentImage || isLowResThumbnail(currentImage)) && entry.imageUrl) {
+      updatePayload.image = entry.imageUrl;
     }
     const updated = await client.characters.update(existing.id, updatePayload);
     return {
@@ -1136,16 +1244,64 @@ export async function syncMonsterToArchivist(
 
   const created = await client.characters.create({
     campaign_id: campaignId,
-    character_name: monster.name,
+    character_name: entry.name,
     type: 'Creature' as any,
-    description: statBlock,
-    image: monster.imageUrl,
+    description: formattedSection,
+    image: entry.imageUrl,
   });
 
   return {
     entity: created,
     action: 'created',
   };
+}
+
+/**
+ * Syncs a D&D Beyond monster stat block into Archivist.
+ * Searches for any existing entry matching the monster's name or aliases across both Creatures and Characters:
+ * - If found, updates the existing entry in-place while preserving its current type (e.g. if promoted to an NPC in Characters).
+ * - If not found, creates a new entry with `type: 'Creature'` by default.
+ */
+export async function syncMonsterToArchivist(
+  client: ArchivistClient,
+  campaignId: string,
+  monster: MonsterData,
+  ddbUrl: string,
+  existingMatch?: Character | null
+): Promise<{ entity: Character; action: 'created' | 'updated' }> {
+  const statBlock = formatMonsterStatBlock(monster, ddbUrl);
+  return syncCreatureCompendiumEntry(
+    client,
+    campaignId,
+    monster,
+    statBlock,
+    '### Stat Block',
+    existingMatch
+  );
+}
+
+/**
+ * Syncs a D&D Beyond species Traits block into an Archivist Creature compendium entry.
+ * Searches for any existing entry matching the species name or aliases across both Creatures and Characters:
+ * - If found, updates the existing entry in-place while preserving its current type.
+ * - If not found, creates a new entry with `type: 'Creature'` by default.
+ */
+export async function syncSpeciesToArchivist(
+  client: ArchivistClient,
+  campaignId: string,
+  species: SpeciesData,
+  ddbUrl: string,
+  existingMatch?: Character | null
+): Promise<{ entity: Character; action: 'created' | 'updated' }> {
+  const traitsSection = formatSpeciesTraits(species, ddbUrl);
+  return syncCreatureCompendiumEntry(
+    client,
+    campaignId,
+    species,
+    traitsSection,
+    '### Species Traits',
+    existingMatch
+  );
 }
 
 /**

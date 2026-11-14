@@ -14,6 +14,9 @@ import {
   getArchivistCompendiumUrl,
   findMatchingCharacterOrCreature,
   syncMonsterToArchivist,
+  parseSpeciesDom,
+  formatSpeciesTraits,
+  syncSpeciesToArchivist,
 } from '../src/utils/sync-helpers.ts';
 
 function createMockStellaCharacter(): CharacterData {
@@ -950,6 +953,217 @@ describe('Monster / Creature Compendium Sync', () => {
       findMatchingCharacterOrCreature(Object.values(dbEntities), 'dire wolf')?.id,
       'creature_2'
     );
+  });
+});
+
+describe('Species Compendium Sync', () => {
+  function makeMockNodeList(nodes: any[]) {
+    return nodes;
+  }
+
+  it('parseSpeciesDom extracts only the Traits block and ignores surrounding lore text', () => {
+    const traitIntroP = {
+      nodeType: 1,
+      tagName: 'P',
+      classList: { contains: () => false },
+      outerHTML:
+        '<p><strong>Creature Type:</strong> Humanoid<br/><strong>Size:</strong> Small (about 2–3 feet tall)<br/><strong>Speed:</strong> 30 feet</p>',
+      textContent: 'Creature Type: Humanoid Size: Small (about 2–3 feet tall) Speed: 30 feet',
+      nextSibling: null as any,
+    };
+    const introText = {
+      nodeType: 3,
+      textContent: '  As a Halfling, you have these special traits.  ',
+      nextSibling: null as any,
+    };
+    const braveH4 = {
+      nodeType: 1,
+      tagName: 'H4',
+      classList: { contains: () => false },
+      textContent: 'Brave',
+      outerHTML: '<h4>Brave</h4>',
+      nextSibling: null as any,
+    };
+    const braveDesc = {
+      nodeType: 1,
+      tagName: 'SPAN',
+      classList: { contains: () => false },
+      textContent: 'You have Advantage on saving throws you make to avoid or end the Frightened condition.',
+      outerHTML:
+        '<span><p>You have Advantage on saving throws you make to avoid or end the <a href="/conditions/5">Frightened</a> condition.</p></span>',
+      nextSibling: null as any,
+    };
+    const footerNode = {
+      nodeType: 1,
+      tagName: 'FOOTER',
+      classList: { contains: (c: string) => c === 'static-container-footer' },
+      textContent: 'Player’s Handbook, pg. 193',
+      outerHTML: '<footer class="static-container-footer">Player’s Handbook, pg. 193</footer>',
+      nextSibling: null as any,
+    };
+
+    traitIntroP.nextSibling = introText;
+    introText.nextSibling = braveH4;
+    braveH4.nextSibling = braveDesc;
+    braveDesc.nextSibling = footerNode;
+
+    const traitsH2 = {
+      nodeType: 1,
+      tagName: 'H2',
+      id: 'HalflingTraits',
+      textContent: 'Halfling Traits',
+      nextSibling: traitIntroP,
+    };
+    const loreH1 = {
+      nodeType: 1,
+      tagName: 'H1',
+      id: 'HalflingRaceDetails',
+      textContent: 'Halfling Species Details',
+      nextSibling: null as any,
+    };
+
+    const container = {
+      querySelectorAll: (sel: string) => (sel === 'h2, h3' ? makeMockNodeList([traitsH2]) : []),
+    };
+
+    const mockDoc = {
+      title: 'The Halfling Species for Dungeons & Dragons (D&D) Fifth Edition (5e) - D&D Beyond',
+      body: container,
+      querySelector: (sel: string) => {
+        if (sel === 'h1.page-title') return { textContent: 'Halfling' };
+        if (sel === '.static-container-details') return container;
+        if (sel.includes('.details-aside img')) {
+          return {
+            getAttribute: (attr: string) =>
+              attr === 'src'
+                ? 'https://www.dndbeyond.com/avatars/thumbnails/43940/518/420/618/638607450547677771.png'
+                : null,
+          };
+        }
+        return null;
+      },
+    } as unknown as Document;
+
+    const parsed = parseSpeciesDom(mockDoc);
+    assert.equal(parsed.name, 'Halfling');
+    assert.equal(
+      parsed.imageUrl,
+      'https://www.dndbeyond.com/avatars/thumbnails/43940/518/420/618/638607450547677771.png'
+    );
+    assert.ok(!parsed.traitsMarkdown.includes('Species Details'));
+    assert.ok(!parsed.traitsMarkdown.includes('Player’s Handbook'));
+    assert.ok(parsed.traitsMarkdown.includes('**Creature Type:** Humanoid'));
+    assert.ok(parsed.traitsMarkdown.includes('As a Halfling, you have these special traits.'));
+    assert.ok(parsed.traitsMarkdown.includes('#### Brave'));
+    assert.ok(parsed.traitsMarkdown.includes('[Frightened](/conditions/5) condition.'));
+
+    // Ensure loreH1 was never pulled in
+    assert.ok(!parsed.traitsMarkdown.includes(loreH1.textContent));
+  });
+
+  it('syncSpeciesToArchivist creates a Creature by default and updates existing entries in-place', async () => {
+    const dbEntities: Record<string, Character> = {
+      npc_existing: {
+        id: 'npc_existing',
+        campaign_id: 'camp_1',
+        character_name: 'Elf',
+        type: 'NPC' as any,
+        description: 'Custom campaign notes.\n\n### Species Traits\nOld traits\n\n---\n[View on D&D Beyond](https://www.dndbeyond.com/species/1751437-elf)',
+      } as Character,
+    };
+
+    const createdPayloads: any[] = [];
+    const patchPayloads: any[] = [];
+
+    const mockFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
+
+      if (url.includes('/characters?') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ data: Object.values(dbEntities), page: 1, pages: 1, total: Object.keys(dbEntities).length }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/characters') && method === 'POST') {
+        createdPayloads.push(body);
+        const created: Character = {
+          id: 'creature_halfling',
+          campaign_id: body.campaign_id,
+          character_name: body.character_name,
+          type: body.type,
+          description: body.description,
+          image: body.image,
+        } as Character;
+        dbEntities[created.id] = created;
+        return new Response(JSON.stringify(created), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const singleMatch = /\/characters\/([^/?]+)/.exec(url);
+      if (singleMatch && method === 'GET') {
+        return new Response(JSON.stringify(dbEntities[singleMatch[1]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (singleMatch && method === 'PATCH') {
+        patchPayloads.push(body);
+        const updated = { ...dbEntities[singleMatch[1]], ...body };
+        dbEntities[singleMatch[1]] = updated;
+        return new Response(JSON.stringify(updated), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 404 });
+    };
+
+    const client = new ArchivistClient({
+      apiKey: 'test-key',
+      fetchFn: mockFetch as typeof fetch,
+    });
+
+    // 1. New species creates Creature by default
+    const halflingResult = await syncSpeciesToArchivist(
+      client,
+      'camp_1',
+      {
+        name: 'Halfling',
+        traitsMarkdown: '**Creature Type:** Humanoid\n\n#### Brave\nAdvantage vs Frightened.',
+      },
+      'https://www.dndbeyond.com/species/1751440-halfling'
+    );
+
+    assert.equal(halflingResult.action, 'created');
+    assert.equal(createdPayloads.length, 1);
+    assert.equal(createdPayloads[0].type, 'Creature');
+    assert.equal(createdPayloads[0].character_name, 'Halfling');
+    assert.ok(createdPayloads[0].description.startsWith('### Species Traits'));
+    assert.equal(
+      getArchivistCompendiumUrl(halflingResult.entity),
+      'https://app.myarchivist.ai/compendium/creatures/creature_halfling?section=creatures'
+    );
+
+    // 2. Existing entry (even if type is NPC) updates in-place preserving type and notes
+    const elfResult = await syncSpeciesToArchivist(
+      client,
+      'camp_1',
+      {
+        name: 'Elf',
+        traitsMarkdown: '**Creature Type:** Humanoid\n\n#### Darkvision\n60 feet.',
+      },
+      'https://www.dndbeyond.com/species/1751437-elf'
+    );
+
+    assert.equal(elfResult.action, 'updated');
+    assert.equal(elfResult.entity.id, 'npc_existing');
+    assert.equal(elfResult.entity.type, 'NPC');
+    assert.equal(patchPayloads[0].type, undefined);
+    assert.ok(elfResult.entity.description?.startsWith('Custom campaign notes.'));
+    assert.ok(elfResult.entity.description?.includes('#### Darkvision'));
   });
 });
 
